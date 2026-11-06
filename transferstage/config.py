@@ -149,6 +149,30 @@ class LoggingConfig:
         _require(self.interval_s > 0, "logging.interval_s must be > 0")
 
 
+def _presets(value: Any) -> list[dict[str, Any]]:
+    """Validate ``presets``: a list of {name, z_um, angle_deg} (named Z + angle positions)."""
+    if value is None:
+        return []
+    _require(isinstance(value, list), "presets must be a list of {name, z_um, angle_deg}")
+    out: list[dict[str, Any]] = []
+    for i, p in enumerate(value):
+        _require(isinstance(p, dict), f"presets[{i}] must be a mapping")
+        unknown = set(p) - {"name", "z_um", "angle_deg"}
+        _require(not unknown, f"unknown key(s) in presets[{i}]: {sorted(unknown)}")
+        name = str(p.get("name", "")).strip()
+        _require(bool(name), f"presets[{i}].name must not be empty")
+        out.append(
+            {
+                "name": name,
+                "z_um": _finite(p.get("z_um"), f"presets[{i}].z_um"),
+                "angle_deg": _finite(p.get("angle_deg"), f"presets[{i}].angle_deg"),
+            }
+        )
+    names = [p["name"] for p in out]
+    _require(len(names) == len(set(names)), "presets: names must be unique")
+    return out
+
+
 @dataclass
 class Config:
     devices: DevicesConfig = field(default_factory=DevicesConfig)
@@ -157,8 +181,10 @@ class Config:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     keys: dict[str, str] = field(default_factory=_default_keys)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    presets: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        self.presets = _presets(self.presets)
         _require(
             self.pid.output_high <= self.limits.v_max,
             f"pid.output_high ({self.pid.output_high} V) must be <= limits.v_max ({self.limits.v_max} V)",

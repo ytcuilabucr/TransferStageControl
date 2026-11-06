@@ -52,11 +52,50 @@ cfg = load_config()          # reads ./config.yaml, raises ConfigError if invali
 
 ## Running
 
-The GUI arrives in Phase 5. Until then, the package can be imported and tested:
-
 ```powershell
 .venv\Scripts\Activate.ps1
-pytest
+python -m transferstage            # or: transferstage
 ```
 
-The app writes its log to `logs/app.log` (rotating, 5 × 5 MB).
+Options: `--config PATH`, `--no-datalog`, `--sim-time-scale N` (speeds up the simulated
+thermal plant for demos). With every `devices.simulate` flag true (the default) the app runs
+entirely on simulators.
+
+Tabs:
+- **Manual**: Z Up/Down (hold to jog), speed knob + Set Speed, Cancel Motion, Safe Lock,
+  Up/Down/Busy indicators, Z position slide, Z-status, time since last motion, Move Z to,
+  Home Z; rotator Set Angle / Current Angle / Home; named Z + angle presets (saved in `config.yaml`).
+- **Temperature**: set point + ramp rate + Set, Ramping indicator, PSU On/Off, PID gains and
+  Reinitialize PID, readouts, temperature and voltage charts (rolling window, pause to zoom),
+  profile editor/runner, alarm banner with Acknowledge.
+- **Settings**: edit and save `config.yaml`. Key bindings apply on Save; the rest on restart.
+  Limits cannot exceed 300 °C / 24 V.
+- **Log**: live application log, alarm history, button to open the data-log folder.
+
+Each session writes a CSV to `logs/YYYYMMDD_HHMMSS.csv`; the app log is `logs/app.log`
+(rotating, 5 × 5 MB). Closing the window (or an unhandled error) stops all motion, switches
+the PSU off and closes the instruments; you are asked to confirm if the PSU is on.
+
+### TourBox shortcuts
+
+Set the TourBox Console to send these keystrokes (change them in Settings → Key bindings):
+
+| Action | TourBox control | Default key |
+|---|---|---|
+| Safe Lock (toggle) | Side + Top | `Ctrl+Alt+L` |
+| Cancel Motion | Top | `Ctrl+Alt+C` |
+| Speed up (+5 % of max, applied at once) | Knob clockwise | `Ctrl+Alt+Up` |
+| Speed down | Knob counter-clockwise | `Ctrl+Alt+Down` |
+| Jog Z up while held | Tall | `Ctrl+Alt+PgUp` |
+| Jog Z down while held | Short | `Ctrl+Alt+PgDown` |
+
+The shortcuts work whenever an app window is focused. Jogs start on key press and stop on key
+release; auto-repeat is ignored, and a jog stops if the app loses focus. The Ctrl+Alt modifier
+keeps them from clashing with typing in number fields.
+
+## Tests
+
+```powershell
+pytest                 # hardware tests are skipped
+pytest --hardware      # include tests that need the instruments
+```

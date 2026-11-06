@@ -18,6 +18,9 @@ dependencies = [
     "numpy",
 ]
 
+[project.scripts]
+transferstage = "transferstage.app:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest",

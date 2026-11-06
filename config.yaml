@@ -44,3 +44,5 @@ keys:              # action -> Qt shortcut string; match the TourBox Console map
 logging:
   dir: logs
   interval_s: 1.0  # data-log sample interval
+
+presets: []        # named Z + angle positions saved from the Manual tab: [{name, z_um, angle_deg}, ...]
