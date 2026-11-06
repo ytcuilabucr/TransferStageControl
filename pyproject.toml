@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transferstage"
+version = "0.1.0"
+description = "Python port of the TransferStageControl LabVIEW project (Thorlabs stages, B&K 1685B PSU, DMM RTD, PID heater)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "PyQt5",
+    "pyqtgraph",
+    "pyserial",
+    "pyvisa",
+    "pythonnet",
+    "pyyaml",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-qt",
+]
+
+[tool.setuptools.packages.find]
+include = ["transferstage*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

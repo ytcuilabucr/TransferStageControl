@@ -1,0 +1,46 @@
+# TransferStageControl configuration.
+# Hard safety limits are enforced in code: limits.t_max_c <= 300 °C, limits.v_max <= 24 V,
+# pid.output_high <= limits.v_max. Values above these are rejected at load time.
+
+devices:
+  z_serial: "27270114"        # KCube DC Servo (Z stage)
+  rotator_serial: "55524924"  # Integrated Stepper (rotator)
+  psu_port: COM4              # B&K 1685B
+  dmm_visa: DMM               # VISA alias of the RTD multimeter
+  kinesis_path: 'C:\Program Files\Thorlabs\Kinesis'
+  simulate:                   # true = use the built-in simulator instead of hardware
+    z: true
+    rotator: true
+    psu: true
+    dmm: true
+
+pid:
+  kc: 0.5          # proportional gain (V/°C)
+  ti_min: 1.0      # integral time, minutes (0 disables integral)
+  td_min: 0.0      # derivative time, minutes
+  period_ms: 500   # control loop period
+  output_low: 0.0  # V
+  output_high: 24.0  # V, must be <= limits.v_max
+
+ramp:
+  default_rate_deg_min: 10.0  # 0 = step change
+
+limits:
+  t_max_c: 300.0     # over-temperature trip, °C (max 300)
+  v_max: 24.0        # PSU voltage cap, V (max 24)
+  i_max: 3.0         # PSU current limit, A
+  z_min_um: 0.0      # Z soft limits, µm
+  z_max_um: 25000.0
+  stale_temp_s: 5.0  # PSU off if no fresh temperature reading for this long
+
+keys:              # action -> Qt shortcut string; match the TourBox Console mapping
+  safe_lock: Ctrl+Alt+L
+  cancel_motion: Ctrl+Alt+C
+  speed_up: Ctrl+Alt+Up
+  speed_down: Ctrl+Alt+Down
+  jog_up: Ctrl+Alt+PgUp
+  jog_down: Ctrl+Alt+PgDown
+
+logging:
+  dir: logs
+  interval_s: 1.0  # data-log sample interval
