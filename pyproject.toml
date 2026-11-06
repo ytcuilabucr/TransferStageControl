@@ -29,3 +29,6 @@ include = ["transferstage*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "hardware: needs the real instruments; skipped unless pytest is run with --hardware",
+]

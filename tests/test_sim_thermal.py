@@ -189,8 +189,13 @@ def test_build_devices_all_simulated():
     assert devs.thermometer.read_temperature() > 25
 
 
-@pytest.mark.parametrize("flag", ["z", "rotator", "psu", "dmm"])
-def test_build_devices_real_driver_not_yet_implemented(flag):
+@pytest.mark.parametrize(
+    "flag, attr, cls_name",
+    [("z", "z", "KinesisZStage"), ("rotator", "rotator", "KinesisRotator"),
+     ("psu", "psu", "Psu1685B"), ("dmm", "thermometer", "DmmThermometer")],
+)
+def test_build_devices_real_driver_created_unconnected(flag, attr, cls_name):
     cfg = config_from_dict({"devices": {"simulate": {flag: False}}})
-    with pytest.raises(NotImplementedError, match=f"simulate.{flag}"):
-        build_devices(cfg)
+    dev = getattr(build_devices(cfg), attr)
+    assert type(dev).__name__ == cls_name
+    assert not dev.is_connected

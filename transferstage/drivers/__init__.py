@@ -1,12 +1,14 @@
 """Device drivers and the factory that picks real or simulated devices.
 
 Real drivers are imported lazily so that the simulators work on machines without
-pyserial/pyvisa hardware or the Kinesis install. Phase 3 must provide:
+pyserial/pyvisa hardware or the Kinesis install. The real drivers are:
 
 * ``drivers/psu_1685b.py``  -> ``Psu1685B(port: str)``
 * ``drivers/dmm.py``        -> ``DmmThermometer(visa_alias: str)``
 * ``drivers/kinesis.py``    -> ``KinesisZStage(serial: str, kinesis_path: str)`` and
   ``KinesisRotator(serial: str, kinesis_path: str)``
+
+Each module has a ``python -m transferstage.drivers.<module> --help`` test CLI.
 """
 
 from __future__ import annotations
