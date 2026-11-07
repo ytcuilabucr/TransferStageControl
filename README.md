@@ -20,7 +20,20 @@ See [PLAN.md](PLAN.md) for the roadmap.
 - NI-VISA (or another VISA backend) with an alias `DMM` for the multimeter
 - The 1685B on `COM4` (configurable)
 
-## Setup
+None of the instrument software is needed to run the app on the simulators.
+
+## Install
+
+1. **Python 3.12, 64-bit**, from python.org (tick "Add python.exe to PATH" or use the `py` launcher).
+2. **Thorlabs Kinesis, 64-bit.** Download "Kinesis" for **64-bit Windows** from thorlabs.com
+   (Software → Motion Control → Kinesis) and install it with the default path
+   `C:\Program Files\Thorlabs\Kinesis`. A different path goes in `devices.kinesis_path`.
+   Check with `python -m transferstage.drivers.kinesis --list`, which should list `27270114` and `55524924`.
+   Close the Kinesis GUI before starting this app; only one program can own the stages.
+3. **NI-VISA.** In NI MAX, give the multimeter the alias `DMM`
+   (check with `python -m transferstage.drivers.dmm --alias DMM --watch`).
+4. **B&K 1685B.** Install its USB-serial driver and note the COM port in Device Manager (default `COM4`).
+5. **This project:**
 
 ```powershell
 py -3.12 -m venv .venv
@@ -28,6 +41,9 @@ py -3.12 -m venv .venv
 python -m pip install --upgrade pip
 pip install -e .[dev]
 ```
+
+6. Set the `devices.simulate` flags in `config.yaml` to `false` for the connected instruments,
+   then work through the [hardware acceptance checklist](docs/acceptance.md) before using the app for real samples.
 
 ## Configuration
 
@@ -52,14 +68,25 @@ cfg = load_config()          # reads ./config.yaml, raises ConfigError if invali
 
 ## Running
 
+Double-click **`run.bat`**. It activates `.venv` and runs the app, passes any arguments through,
+and keeps the console open with a message if the app exits with an error. Or, from a shell:
+
 ```powershell
 .venv\Scripts\Activate.ps1
 python -m transferstage            # or: transferstage
 ```
 
 Options: `--config PATH`, `--no-datalog`, `--sim-time-scale N` (speeds up the simulated
-thermal plant for demos). With every `devices.simulate` flag true (the default) the app runs
-entirely on simulators.
+thermal plant for demos).
+
+### Simulation mode
+
+With every `devices.simulate` flag `true` (the default) the app runs entirely on simulators, with no
+hardware or instrument drivers needed. The flags are per device, so you can, for example, run the real stages
+with a simulated heater. The simulated Z stage and rotator move at realistic speeds. The simulated heater is a
+first-order thermal model (22 °C ambient), and `--sim-time-scale 20` makes it react 20× faster for demos.
+The simulate toggles in Settings take effect on restart. The status bar shows which devices are
+connected.
 
 Tabs:
 - **Manual**: Z Up/Down (hold to jog), speed knob + Set Speed, Cancel Motion, Safe Lock,
@@ -106,6 +133,35 @@ because it is the conservative choice. **Apply gains** loads the selected row in
 The run aborts on a safety trip, on Cancel, on PSU off, on timeout, or if T rises more than
 "Max rise above SP" above the set point. After it ends, the PID holds the set point with the old gains.
 
+## Safety
+
+What the software enforces (GUI and scripting API alike):
+
+- **Hard limits in code:** 300 °C and 24 V. `config.yaml` and the Settings tab can only lower them, and
+  `pid.output_high` can't exceed `limits.v_max`. A config above the limits is refused at start-up.
+- **Over-temperature trip** at `limits.t_max_c`. The PSU output switches off and the alarm latches: the PSU can't be
+  switched on again until the alarm is acknowledged.
+- **Stale temperature trip:** if no valid reading arrives for `limits.stale_temp_s` (DMM unplugged, VISA error),
+  the PSU switches off the same way.
+- **PSU deviation warning** when the readback differs from the command by more than 0.5 V (not while current-limited).
+- **Z soft limits:** moves outside `z_min_um`–`z_max_um` are refused, and jogs stop at the limit. **Safe Lock** blocks
+  every motion command except Cancel.
+- **Shutdown:** closing the window, an unhandled exception, or leaving a `Stage` block stops both stages, sets the PSU to
+  0 V with its output off, and closes the instruments. Each step runs even if an earlier one fails.
+
+What it **cannot** do:
+
+- If the process is **killed** (Task Manager, `taskkill /F`, a crash inside a driver DLL, power loss, a Windows
+  update reboot), no shutdown runs. **The 1685B keeps its last voltage and output state**, so the heater
+  stays on with nothing regulating it.
+- The temperature limit relies on the one RTD reading. An RTD that has come loose from the heater block reads
+  low, and the controller will keep heating.
+
+**Fit an independent hardware thermal cutoff** in the heater circuit (a thermal switch or fuse on the heater
+block, or a separate over-temperature controller), and don't leave the heater running unattended without it.
+Test the trips with the [acceptance checklist](docs/acceptance.md) by lowering `limits.t_max_c` (e.g. to 40 °C),
+never by heating to 300 °C.
+
 ## Scripting API
 
 `transferstage.api.Stage` runs the instruments without the GUI, with the same PID and safety
@@ -132,6 +188,34 @@ seconds. See [examples/anneal_and_rotate.py](examples/anneal_and_rotate.py):
 python examples/anneal_and_rotate.py               # simulators, virtual time
 python examples/anneal_and_rotate.py --real-time   # wall clock (required with hardware)
 ```
+
+## Validation
+
+- [docs/acceptance.md](docs/acceptance.md): the hardware acceptance checklist. It covers every gui_v2 feature and the
+  safety trips. Run it once on the real instruments.
+- [docs/pid_comparison.md](docs/pid_comparison.md): how to compare this PID with LabVIEW `ThermalControl.vi` using the
+  same gains, with pass criteria. [scripts/compare_pid.py](scripts/compare_pid.py) computes the metrics:
+
+```powershell
+python scripts/compare_pid.py metrics logs\20261106_101500.csv
+python scripts/compare_pid.py compare logs\20261106_101500.csv lv_step.csv --lv-time Time --lv-temp T --lv-sp SP --lv-volt V
+python scripts/compare_pid.py replay lv_step.csv --time Time --temp T --sp SP --volt V --kc 0.5 --ti 1.0
+```
+
+## Stand-alone build (optional)
+
+A PyInstaller one-folder build runs on a PC without Python:
+
+```powershell
+pip install -e .[build]
+pyinstaller transferstage.spec --noconfirm
+```
+
+This produces `dist\TransferStageControl\`. Copy the whole folder to the target PC and run
+`TransferStageControl.exe`. `config.yaml` sits next to the exe, and `logs\` is created there.
+The build does **not** include the instrument software. The target PC still needs **64-bit Thorlabs
+Kinesis** (its DLLs are loaded at run time from `devices.kinesis_path`), NI-VISA with the `DMM` alias, and the 1685B
+USB-serial driver, except for devices left in simulation.
 
 ## Tests
 

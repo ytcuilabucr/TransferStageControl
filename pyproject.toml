@@ -26,6 +26,9 @@ dev = [
     "pytest",
     "pytest-qt",
 ]
+build = [
+    "pyinstaller>=6",
+]
 
 [tool.setuptools.packages.find]
 include = ["transferstage*"]

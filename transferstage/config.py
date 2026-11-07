@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,10 @@ import yaml
 HARD_T_MAX_C = 300.0
 HARD_V_MAX = 24.0
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):  # PyInstaller build: config.yaml and logs/ sit next to the .exe
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 
