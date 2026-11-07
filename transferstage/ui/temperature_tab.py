@@ -1,4 +1,15 @@
-"""Temperature tab: set point + ramp, PSU on/off, PID gains, readouts, charts, profiles, alarms."""
+"""Temperature panels, laid out like the LabVIEW front panel (gui_v2.vi).
+
+``TemperaturePanel`` owns the thermal widgets and hands them to the main window:
+
+* ``control_panel``  – left column "Temperature Control": ramp rate, set point, Set, PSU output
+* ``settings_page``  – centre tab "Settings": SN#, PID period / reinitialize, PID gains, PV,
+                       program SP, DMM / PSU, ramp control readouts
+* ``profile_page``   – centre tab "Profile": multi-segment ramp/hold editor
+* ``autotune_page``  – centre tab "Autotune": relay autotune
+* ``charts``         – right column: PV/SP legend, temperature chart, voltage chart
+* ``alarm_banner``   – red banner shown above everything while an alarm is active
+"""
 
 from __future__ import annotations
 
@@ -7,8 +18,7 @@ from collections import deque
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -23,8 +33,6 @@ from PyQt5.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
-    QSplitter,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -36,135 +44,178 @@ from ..config import HARD_T_MAX_C
 from ..control.autotune import RECOMMENDED_RULE, RULES, AutotuneParams, AutotuneState, AutotuneStatus
 from ..control.profile import ProfileError, Segment, TemperatureProfile
 from ..control.thermal import ThermalSample
-from .widgets import AMBER, GREEN, RED, Led, fmt, spin
+from .widgets import AMBER, GREEN, LED_GREEN_OFF, RED, Led, fmt, indicator, section, spin
 
 log = logging.getLogger(__name__)
 
 MAX_POINTS = 200_000  # history kept for the charts (~28 h at 2 Hz)
+PV_COLOR = "#1f77d4"
+SP_COLOR = "#e0303a"
 
 
-class TemperatureTab(QWidget):
+class TemperaturePanel(QObject):
     message = pyqtSignal(str)
 
-    def __init__(self, controller: AppController, parent: QWidget | None = None) -> None:
+    def __init__(self, controller: AppController, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.c = controller
         cfg = controller.config
         self.t_max = min(cfg.limits.t_max_c, HARD_T_MAX_C)
         self._last: ThermalSample | None = None
+        self._last_rate = cfg.ramp.default_rate_deg_min
         self._t: deque[float] = deque(maxlen=MAX_POINTS)
         self._temp: deque[float] = deque(maxlen=MAX_POINTS)
         self._target: deque[float] = deque(maxlen=MAX_POINTS)
         self._prog: deque[float] = deque(maxlen=MAX_POINTS)
         self._volt: deque[float] = deque(maxlen=MAX_POINTS)
 
-        root = QVBoxLayout(self)
-        root.addWidget(self._build_alarm_banner())
-
-        split = QSplitter(Qt.Horizontal)
-        left = QWidget()
-        lv = QVBoxLayout(left)
-        lv.setContentsMargins(0, 0, 0, 0)
-        lv.addWidget(self._build_setpoint_group())
-        lv.addWidget(self._build_readouts_group())
-        lv.addWidget(self._build_pid_group())
-        self.side_tabs = QTabWidget()
-        self.side_tabs.addTab(self._build_profile_group(), "Profile")
-        self.side_tabs.addTab(self._build_autotune_group(), "Autotune")
-        lv.addWidget(self.side_tabs, 1)
-        split.addWidget(left)
-        split.addWidget(self._build_charts())
-        split.setStretchFactor(0, 0)
-        split.setStretchFactor(1, 1)
-        split.setSizes([380, 900])
-        root.addWidget(split, 1)
+        self.alarm_banner = self._build_alarm_banner()
+        self.control_panel = self._build_control_panel()
+        self.settings_page = self._build_settings_page()
+        self.profile_page = self._build_profile_page()
+        self.autotune_page = self._build_autotune_page()
+        self.charts = self._build_charts()
 
     # ------------------------------------------------------------------ layout
 
     def _build_alarm_banner(self) -> QFrame:
-        self.alarm_banner = QFrame()
-        self.alarm_banner.setStyleSheet(f"QFrame {{ background:{RED}; }} QLabel {{ color:white; font-weight:bold; }}")
-        h = QHBoxLayout(self.alarm_banner)
+        banner = QFrame()
+        banner.setStyleSheet(f"QFrame {{ background:{RED}; }} QLabel {{ color:white; font-weight:bold; }}")
+        h = QHBoxLayout(banner)
         self.alarm_label = QLabel("")
         self.alarm_label.setWordWrap(True)
         self.ack_btn = QPushButton("Acknowledge")
         self.ack_btn.clicked.connect(self.c.acknowledge_alarm.emit)
         h.addWidget(self.alarm_label, 1)
         h.addWidget(self.ack_btn)
-        self.alarm_banner.setVisible(False)
-        return self.alarm_banner
+        banner.setVisible(False)
+        return banner
 
-    def _build_setpoint_group(self) -> QGroupBox:
-        g = QGroupBox("Set point")
-        grid = QGridLayout(g)
-        self.sp_spin = spin(0, self.t_max, 25.0, decimals=1, step=1, suffix=" °C")
-        self.rate_spin = spin(0, 1000, self.c.config.ramp.default_rate_deg_min, decimals=1, step=1, suffix=" °C/min")
-        self.rate_spin.setToolTip("0 = step change")
-        self.set_btn = QPushButton("Set")
-        self.set_btn.clicked.connect(self.apply_setpoint)
+    def _build_control_panel(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        self.busy_led = Led("Busy", GREEN, off_color=LED_GREEN_OFF)
+        self.busy_led.setToolTip("On while the PSU output is on (PID driving the heater)")
+        v.addWidget(section("Temperature Control", extra=self.busy_led))
+
+        grid = QGridLayout()
+        self.rate_spin = spin(0, 1000, self._last_rate, decimals=2, step=1)
+        self.rate_spin.setToolTip("°C/min; 0 = step change")
+        self.sp_spin = spin(0, self.t_max, 20.0, decimals=2, step=1)
+        self.sp_spin.setToolTip("°C")
         self.ramping_led = Led("Ramping", AMBER)
-        self.psu_btn = QPushButton("PSU Off")
+        self.set_btn = QPushButton("✔ Set")
+        self.set_btn.setMinimumHeight(34)
+        self.set_btn.clicked.connect(self.apply_setpoint)
+        grid.addWidget(QLabel("Ramp rate (deg/min)"), 0, 0, Qt.AlignRight)
+        grid.addWidget(self.rate_spin, 0, 1)
+        grid.addWidget(self.ramping_led, 0, 2)
+        grid.addWidget(QLabel("setpoint (°C)"), 1, 0, Qt.AlignRight)
+        grid.addWidget(self.sp_spin, 1, 1)
+        grid.addWidget(self.set_btn, 1, 2)
+        v.addLayout(grid)
+
+        h = QHBoxLayout()
+        self.psu_btn = QPushButton("PSU Output: Off")
         self.psu_btn.setCheckable(True)
-        self.psu_btn.setMinimumHeight(36)
+        self.psu_btn.setMinimumHeight(32)
         self.psu_btn.setStyleSheet(
             f"QPushButton {{ font-weight:bold; }} QPushButton:checked {{ background:{GREEN}; color:black; }}"
         )
         self.psu_btn.clicked.connect(self._on_psu_clicked)
-        grid.addWidget(QLabel("Temperature:"), 0, 0)
-        grid.addWidget(self.sp_spin, 0, 1)
-        grid.addWidget(QLabel("Ramp rate:"), 1, 0)
-        grid.addWidget(self.rate_spin, 1, 1)
-        grid.addWidget(self.set_btn, 0, 2, 2, 1)
-        grid.addWidget(self.ramping_led, 2, 0)
-        grid.addWidget(self.psu_btn, 2, 1, 1, 2)
-        return g
+        h.addWidget(self.psu_btn, 1)
+        h.addWidget(QLabel("PV"))
+        self.pv_left = indicator("—", 80)
+        h.addWidget(self.pv_left)
+        v.addLayout(h)
+        return w
 
-    def _build_readouts_group(self) -> QGroupBox:
-        g = QGroupBox("Readouts")
-        form = QFormLayout(g)
-        mono = QFont("Consolas")
-        mono.setPointSize(13)
+    def _build_settings_page(self) -> QWidget:
+        d = self.c.config.devices
+        p = self.c.config.pid
+        w = QWidget()
+        grid = QGridLayout(w)
+
+        # left half: devices + readouts + ramp control
+        left = QVBoxLayout()
+        left.addWidget(QLabel("Motor SN#"))
+        self.motor_sn = indicator(d.z_serial, 120)
+        left.addWidget(self.motor_sn)
+        left.addWidget(QLabel("Rotator SN#"))
+        self.rot_sn = indicator(d.rotator_serial, 120)
+        left.addWidget(self.rot_sn)
+        left.addSpacing(10)
+
         self.ro: dict[str, QLabel] = {}
+        form = QFormLayout()
         for key, label in (
-            ("T", "Temperature"),
-            ("target", "Target SP"),
-            ("prog", "Program SP"),
+            ("T", "PV"),
+            ("prog", "program SP"),
+            ("target", "target SP"),
             ("vcmd", "V command"),
             ("vread", "V readback"),
             ("iread", "I readback"),
         ):
-            lab = QLabel("—")
-            lab.setFont(mono)
+            lab = indicator("—", 100)
             self.ro[key] = lab
-            form.addRow(label + ":", lab)
-        return g
+            form.addRow(label, lab)
+        form.addRow("DMM", indicator(d.dmm_visa, 100))
+        form.addRow("PSU", indicator(d.psu_port, 100))
+        left.addLayout(form)
 
-    def _build_pid_group(self) -> QGroupBox:
-        g = QGroupBox("PID")
-        grid = QGridLayout(g)
-        p = self.c.config.pid
-        self.kc_spin = spin(0, 1000, p.kc, decimals=4, step=0.05)
-        self.ti_spin = spin(0, 1000, p.ti_min, decimals=4, step=0.1, suffix=" min")
-        self.td_spin = spin(0, 1000, p.td_min, decimals=4, step=0.01, suffix=" min")
+        rc = QGroupBox("Ramp Control")
+        rf = QFormLayout(rc)
+        self.rc_og = indicator("—", 80)
+        self.rc_rate = indicator("—", 80)
+        self.rc_sp = indicator("—", 80)
+        self.ascending_led = Led("", GREEN, off_color=LED_GREEN_OFF)
+        rf.addRow("OG setpoint", self.rc_og)
+        rf.addRow("Ramp rate (deg/min)", self.rc_rate)
+        rf.addRow("setpoint", self.rc_sp)
+        rf.addRow("Ascending?", self.ascending_led)
+        left.addWidget(rc)
+        left.addStretch(1)
+        grid.addLayout(left, 0, 0)
+
+        # right half: PID period / reinitialize / gains
+        right = QVBoxLayout()
+        top = QGridLayout()
+        top.addWidget(QLabel("PID millisecond multiple"), 0, 0)
+        self.period_label = indicator(f"{p.period_ms}", 70)
+        self.period_label.setToolTip("Control period in ms (change it in the Config tab; applies on restart)")
+        top.addWidget(self.period_label, 1, 0)
+        top.addWidget(QLabel("PID reinitialize?"), 0, 1)
+        self.reset_btn = QPushButton("Reinitialize")
+        self.reset_btn.clicked.connect(self.c.reset_pid.emit)
+        top.addWidget(self.reset_btn, 1, 1)
+        right.addLayout(top)
+        right.addSpacing(10)
+
+        gains = QGroupBox("PID gains")
+        gains.setStyleSheet("QGroupBox { background:#9a9a9a; } QLabel { color:black; }")
+        gf = QFormLayout(gains)
+        self.kc_spin = spin(0, 1000, p.kc, decimals=3, step=0.05)
+        self.ti_spin = spin(0, 1000, p.ti_min, decimals=3, step=0.1)
+        self.td_spin = spin(0, 1000, p.td_min, decimals=3, step=0.01)
         self.ti_spin.setToolTip("Integral time in minutes (0 disables integral)")
+        gf.addRow("proportional gain (Kc)", self.kc_spin)
+        gf.addRow("integral time (Ti, min)", self.ti_spin)
+        gf.addRow("derivative time (Td, min)", self.td_spin)
         self.gains_btn = QPushButton("Apply gains")
         self.gains_btn.clicked.connect(
             lambda: self.c.set_gains.emit(self.kc_spin.value(), self.ti_spin.value(), self.td_spin.value())
         )
-        self.reset_btn = QPushButton("Reinitialize PID")
-        self.reset_btn.clicked.connect(self.c.reset_pid.emit)
-        grid.addWidget(QLabel("Kc"), 0, 0)
-        grid.addWidget(self.kc_spin, 0, 1)
-        grid.addWidget(QLabel("Ti"), 1, 0)
-        grid.addWidget(self.ti_spin, 1, 1)
-        grid.addWidget(QLabel("Td"), 2, 0)
-        grid.addWidget(self.td_spin, 2, 1)
-        grid.addWidget(self.gains_btn, 0, 2)
-        grid.addWidget(self.reset_btn, 1, 2)
-        return g
+        gf.addRow("", self.gains_btn)
+        right.addWidget(gains)
+        right.addStretch(1)
+        grid.addLayout(right, 0, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        return w
 
-    def _build_profile_group(self) -> QGroupBox:
-        g = QGroupBox("Profile")
+    def _build_profile_page(self) -> QWidget:
+        g = QWidget()
         v = QVBoxLayout(g)
         self.profile_table = QTableWidget(0, 3)
         self.profile_table.setHorizontalHeaderLabels(["Ramp to (°C)", "Rate (°C/min)", "Hold (min)"])
@@ -195,7 +246,7 @@ class TemperatureTab(QWidget):
         v.addWidget(self.profile_status)
         return g
 
-    def _build_autotune_group(self) -> QWidget:
+    def _build_autotune_page(self) -> QWidget:
         g = QWidget()
         v = QVBoxLayout(g)
         form = QFormLayout()
@@ -263,45 +314,64 @@ class TemperatureTab(QWidget):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
+
+        # PV / SP legend with live values (top-right of the LabVIEW panel)
+        legend = QHBoxLayout()
+        legend.addStretch(1)
+        lg = QGridLayout()
+        self.pv_label = indicator("—", 80)
+        self.sp_label = indicator("—", 80)
+        for row, (name, color, lab) in enumerate((("PV", PV_COLOR, self.pv_label), ("SP", SP_COLOR, self.sp_label))):
+            swatch = QLabel(f'{name} <span style="color:{color}; font-size:16px;">&#8212;&#8212;</span>')
+            swatch.setTextFormat(Qt.RichText)
+            lg.addWidget(swatch, row, 0)
+            lg.addWidget(lab, row, 1)
+        legend.addLayout(lg)
+        v.addLayout(legend)
+
+        pg.setConfigOptions(antialias=True)
+        self.temp_plot = pg.PlotWidget(background="w")
+        self.temp_plot.setLabel("left", "Temperature", units="°C")
+        self.temp_plot.showGrid(x=True, y=True, alpha=0.25)
+        self.curve_T = self.temp_plot.plot(pen=pg.mkPen(PV_COLOR, width=2), name="PV")
+        self.curve_prog = self.temp_plot.plot(pen=pg.mkPen(SP_COLOR, width=1.5), name="SP")
+        self.curve_target = self.temp_plot.plot(
+            pen=pg.mkPen(SP_COLOR, width=1, style=Qt.DashLine), name="Target SP"
+        )
+        self.volt_plot = pg.PlotWidget(background="w")
+        self.volt_plot.setLabel("left", "Voltage", units="V")
+        self.volt_plot.setLabel("bottom", "Time", units="s")
+        self.volt_plot.showGrid(x=True, y=True, alpha=0.25)
+        self.volt_plot.setXLink(self.temp_plot)
+        self.curve_V = self.volt_plot.plot(pen=pg.mkPen("#2a8a2a", width=2), name="V")
+        for plot in (self.temp_plot, self.volt_plot):
+            for ax in ("left", "bottom"):
+                plot.getAxis(ax).setTextPen("k")
+                plot.getAxis(ax).setPen("k")
+        v.addWidget(self.temp_plot, 3)
+        v.addWidget(self.volt_plot, 2)
+
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Window:"))
         self.window_spin = spin(0.5, 24 * 60, 10, decimals=1, step=1, suffix=" min")
         self.window_spin.valueChanged.connect(lambda _: self.redraw())
         bar.addWidget(self.window_spin)
         self.pause_chk = QCheckBox("Pause")
+        self.pause_chk.setToolTip("Pause, then drag to pan / wheel to zoom")
         self.pause_chk.toggled.connect(lambda on: None if on else self.redraw())
         bar.addWidget(self.pause_chk)
         clear = QPushButton("Clear")
         clear.clicked.connect(self.clear_charts)
         bar.addWidget(clear)
         bar.addStretch(1)
-        bar.addWidget(QLabel("Pause, then drag to pan / wheel to zoom"))
         v.addLayout(bar)
-
-        pg.setConfigOptions(antialias=True)
-        self.temp_plot = pg.PlotWidget()
-        self.temp_plot.setLabel("left", "Temperature", units="°C")
-        self.temp_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.temp_plot.addLegend(offset=(10, 10))
-        self.curve_T = self.temp_plot.plot(pen=pg.mkPen("#e74c3c", width=2), name="T")
-        self.curve_target = self.temp_plot.plot(
-            pen=pg.mkPen("#2ecc40", width=1, style=Qt.DashLine), name="Target SP"
-        )
-        self.curve_prog = self.temp_plot.plot(pen=pg.mkPen("#3498db", width=1.5), name="Program SP")
-        self.volt_plot = pg.PlotWidget()
-        self.volt_plot.setLabel("left", "PSU voltage", units="V")
-        self.volt_plot.setLabel("bottom", "Time", units="s")
-        self.volt_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.volt_plot.setXLink(self.temp_plot)
-        self.curve_V = self.volt_plot.plot(pen=pg.mkPen("#f39c12", width=2), name="V")
-        v.addWidget(self.temp_plot, 3)
-        v.addWidget(self.volt_plot, 2)
         return w
 
     # ------------------------------------------------------------------ commands
 
     def apply_setpoint(self) -> None:
-        self.c.set_target.emit(float(self.sp_spin.value()), float(self.rate_spin.value()))
+        self._last_rate = float(self.rate_spin.value())
+        self.c.set_target.emit(float(self.sp_spin.value()), self._last_rate)
         self.message.emit(f"Set point {self.sp_spin.value():g} °C at {self.rate_spin.value():g} °C/min")
 
     def _on_psu_clicked(self, checked: bool) -> None:
@@ -312,7 +382,7 @@ class TemperatureTab(QWidget):
         self.psu_btn.blockSignals(True)
         self.psu_btn.setChecked(on)
         self.psu_btn.blockSignals(False)
-        self.psu_btn.setText("PSU On" if on else "PSU Off")
+        self.psu_btn.setText("PSU Output: On" if on else "PSU Output: Off")
 
     # ------------------------------------------------------------------ autotune
 
@@ -333,7 +403,7 @@ class TemperatureTab(QWidget):
         try:
             params.validate(self.t_max)
         except ValueError as exc:
-            QMessageBox.warning(self, "Autotune", str(exc))
+            QMessageBox.warning(self.autotune_page, "Autotune", str(exc))
             return
         self._at_result = None
         self.at_apply_btn.setEnabled(False)
@@ -434,44 +504,52 @@ class TemperatureTab(QWidget):
         try:
             profile = self.profile_from_table()
         except (ProfileError, ValueError) as exc:
-            QMessageBox.warning(self, "Profile", str(exc))
+            QMessageBox.warning(self.profile_page, "Profile", str(exc))
             return
         self.c.start_profile.emit(profile)
         self.message.emit(f"Profile started ({len(profile.segments)} segments)")
 
     def _load_profile(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Load profile", "", "YAML (*.yaml *.yml)")
+        path, _ = QFileDialog.getOpenFileName(self.profile_page, "Load profile", "", "YAML (*.yaml *.yml)")
         if not path:
             return
         try:
             self.set_profile(TemperatureProfile.load(path))
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Load profile", str(exc))
+            QMessageBox.warning(self.profile_page, "Load profile", str(exc))
 
     def _save_profile(self) -> None:
         try:
             profile = self.profile_from_table()
         except (ProfileError, ValueError) as exc:
-            QMessageBox.warning(self, "Profile", str(exc))
+            QMessageBox.warning(self.profile_page, "Profile", str(exc))
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save profile", "profile.yaml", "YAML (*.yaml *.yml)")
+        path, _ = QFileDialog.getSaveFileName(self.profile_page, "Save profile", "profile.yaml", "YAML (*.yaml *.yml)")
         if path:
             try:
                 profile.save(path)
             except OSError as exc:
-                QMessageBox.warning(self, "Save profile", str(exc))
+                QMessageBox.warning(self.profile_page, "Save profile", str(exc))
 
     # ------------------------------------------------------------------ samples
 
     def on_sample(self, s: ThermalSample) -> None:
         self._last = s
         self.ro["T"].setText(fmt(s.temperature_c, 2, "°C"))
-        self.ro["target"].setText(fmt(s.target_sp_c, 1, "°C"))
+        self.ro["target"].setText(fmt(s.target_sp_c, 2, "°C"))
         self.ro["prog"].setText(fmt(s.program_sp_c, 2, "°C"))
-        self.ro["vcmd"].setText(fmt(s.v_cmd, 2, "V"))
-        self.ro["vread"].setText(fmt(s.v_read, 2, "V"))
+        self.ro["vcmd"].setText(fmt(s.v_cmd, 3, "V"))
+        self.ro["vread"].setText(fmt(s.v_read, 3, "V"))
         self.ro["iread"].setText(fmt(s.i_read, 3, "A"))
+        self.pv_label.setText(fmt(s.temperature_c, 2))
+        self.pv_left.setText(fmt(s.temperature_c, 2, "°C"))
+        self.sp_label.setText(fmt(s.program_sp_c, 2))
+        self.rc_og.setText(fmt(s.target_sp_c, 2))
+        self.rc_rate.setText(fmt(self._last_rate, 2))
+        self.rc_sp.setText(fmt(s.program_sp_c, 2))
+        self.ascending_led.set_on(s.target_sp_c >= s.program_sp_c)
         self.ramping_led.set_on(s.ramping)
+        self.busy_led.set_on(s.psu_on)
         if not self.psu_btn.isDown():
             self._set_psu_button(s.psu_on)
 

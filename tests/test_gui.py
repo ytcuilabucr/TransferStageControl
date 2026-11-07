@@ -43,7 +43,15 @@ def _key(widget, kind, key, mods=CA, autorep=False):
 
 def test_window_opens_with_sim_devices(gui):
     window, controller, statuses = gui
-    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == ["Manual", "Temperature", "Settings", "Log"]
+    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == [
+        "TourBox GUI",
+        "Kinesis GUI",
+        "Settings",
+        "Profile",
+        "Autotune",
+        "Config",
+        "Log",
+    ]
     assert all(controller.device_connected(n) for n in ("z", "rotator", "psu", "thermometer"))
     assert statuses[-1].z_state is MotorState.IDLE
     assert window.temperature.ro["T"].text() != "—"
@@ -151,11 +159,32 @@ def test_safe_lock_blocks_jog(gui, qtbot):
 def test_speed_keys_change_speed(gui, qtbot):
     window, controller, _ = gui
     z = controller.devices.z
-    before = window.manual.speed_spin.value()
+    m = window.manual
+    m.speed_knob.setValue(2)
     _key(window, QEvent.KeyPress, Qt.Key_F4)
-    assert window.manual.speed_spin.value() > before
-    target = window.manual.speed_spin.value()
+    assert m.speed_index == 3
+    target = controller.config.motion.speed_steps_um_s[3]
+    assert m.selected_speed() == pytest.approx(target)
     qtbot.waitUntil(lambda: z.velocity_um_s == pytest.approx(target), timeout=3000)
+    _key(window, QEvent.KeyPress, Qt.Key_F5)
+    _key(window, QEvent.KeyPress, Qt.Key_F5)
+    assert m.speed_index == 1
+
+
+def test_speed_settings_saved(gui, qtbot, tmp_path):
+    window, controller, _ = gui
+    m = window.manual
+    m.speed_steps[4].setValue(300.0)
+    m._on_speed_steps_edited()
+    assert load_config(tmp_path / "config.yaml").motion.speed_steps_um_s[4] == pytest.approx(300.0)
+
+
+def test_stop_button_cancels_and_heater_off(gui, qtbot):
+    window, controller, _ = gui
+    window.temperature.psu_btn.click()
+    qtbot.waitUntil(lambda: controller.devices.psu.is_on, timeout=3000)
+    window.stop_btn.click()
+    qtbot.waitUntil(lambda: not controller.last_thermal.psu_on, timeout=3000)
 
 
 def test_presets_and_settings_save(gui, qtbot, tmp_path):

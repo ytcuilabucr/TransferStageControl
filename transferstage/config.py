@@ -111,6 +111,24 @@ class RampConfig:
         _require(self.default_rate_deg_min >= 0, "ramp.default_rate_deg_min must be >= 0 (0 = step)")
 
 
+def _default_speed_steps() -> list[float]:
+    return [1.0, 10.0, 20.0, 50.0, 200.0]
+
+
+@dataclass
+class MotionConfig:
+    # Z speeds (µm/s) selected by the 5-position Speed Knob (TourBox knob), positions 0..4.
+    speed_steps_um_s: list[float] = field(default_factory=_default_speed_steps)
+
+    def __post_init__(self) -> None:
+        _require(isinstance(self.speed_steps_um_s, list), "motion.speed_steps_um_s must be a list")
+        _require(len(self.speed_steps_um_s) == 5, "motion.speed_steps_um_s must have exactly 5 values")
+        self.speed_steps_um_s = [
+            _finite(v, f"motion.speed_steps_um_s[{i}]") for i, v in enumerate(self.speed_steps_um_s)
+        ]
+        _require(all(v > 0 for v in self.speed_steps_um_s), "motion.speed_steps_um_s values must be > 0")
+
+
 @dataclass
 class LimitsConfig:
     t_max_c: float = HARD_T_MAX_C
@@ -182,6 +200,7 @@ class Config:
     devices: DevicesConfig = field(default_factory=DevicesConfig)
     pid: PidConfig = field(default_factory=PidConfig)
     ramp: RampConfig = field(default_factory=RampConfig)
+    motion: MotionConfig = field(default_factory=MotionConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     keys: dict[str, str] = field(default_factory=_default_keys)
     logging: LoggingConfig = field(default_factory=LoggingConfig)

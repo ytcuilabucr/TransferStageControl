@@ -112,7 +112,7 @@ TourBox changes are needed (change the app side in Settings → Key bindings if 
 |---|---|---|
 | Safe Lock (toggle) | Side, or Side + Top | `Ctrl+F1` |
 | Cancel Motion | Top | `Ctrl+F6` |
-| Speed up (+5 % of max, applied at once) | Knob clockwise | `Ctrl+F4` |
+| Speed Knob +1 position (applied at once) | Knob clockwise | `Ctrl+F4` |
 | Speed down | Knob counter-clockwise | `Ctrl+F5` |
 | Jog Z up while held | Tall | `Ctrl+F2` |
 | Jog Z down while held | Short | `Ctrl+F3` |
@@ -123,7 +123,7 @@ release; auto-repeat is ignored, and a jog stops if the app loses focus. If the 
 
 ### PID autotune
 
-Temperature tab → **Autotune**. Hold the sample near the tuning temperature with the PSU on, then
+**Autotune** tab. Hold the sample near the tuning temperature with the PSU on, then
 start: the PSU voltage switches between bias ± amplitude (clamped to 0 V and `limits.v_max`) around
 the set point until the oscillation repeats for the set number of cycles. Leave **Bias** at
 "Present output" to use the voltage that currently holds the set point. The table offers
@@ -137,7 +137,7 @@ The run aborts on a safety trip, on Cancel, on PSU off, on timeout, or if T rise
 
 What the software enforces (GUI and scripting API alike):
 
-- **Hard limits in code:** 300 °C and 24 V. `config.yaml` and the Settings tab can only lower them, and
+- **Hard limits in code:** 300 °C and 24 V. `config.yaml` and the Config tab can only lower them, and
   `pid.output_high` can't exceed `limits.v_max`. A config above the limits is refused at start-up.
 - **Over-temperature trip** at `limits.t_max_c`. The PSU output switches off and the alarm latches: the PSU can't be
   switched on again until the alarm is acknowledged.

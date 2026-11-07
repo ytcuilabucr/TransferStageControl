@@ -168,6 +168,13 @@ class AppController(QObject):
         self.save_config(cfg)
         self.config.presets = copy.deepcopy(cfg.presets)
 
+    def save_speed_steps(self, steps: list[float]) -> None:
+        cfg = copy.deepcopy(self.saved_config)
+        cfg.motion.speed_steps_um_s = [float(v) for v in steps]
+        cfg.motion.__post_init__()
+        self.save_config(cfg)
+        self.config.motion.speed_steps_um_s = list(cfg.motion.speed_steps_um_s)
+
 
 # --------------------------------------------------------------------------- exception hook
 

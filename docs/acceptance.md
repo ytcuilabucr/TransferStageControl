@@ -44,14 +44,14 @@ python -m transferstage.drivers.psu_1685b --port COM4 --read
 |---|---|---|---|
 | 1.1 | Run `run.bat` | Window opens with no "Device connection" warning | ☐ |
 | 1.2 | Status bar | Z, rotator, PSU and DMM are all shown as connected; alarm indicator clear | ☐ |
-| 1.3 | Temperature tab | T readout matches the DMM front panel (±0.2 °C) and updates every PID period | ☐ |
-| 1.4 | Temperature tab | PSU shows **Off**, V ≈ 0, I ≈ 0 | ☐ |
-| 1.5 | Manual tab | Z position matches Kinesis / the controller display; Z-status **Idle** | ☐ |
-| 1.6 | Manual tab | Current Angle matches the rotator's real position | ☐ |
+| 1.3 | Settings tab | PV readout matches the DMM front panel (±0.2 °C) and updates every PID period | ☐ |
+| 1.4 | Temperature Control | PSU Output shows **Off**, V ≈ 0, I ≈ 0 | ☐ |
+| 1.5 | Z-Controller | Z-Position matches Kinesis / the controller display; Z-status **Idle** | ☐ |
+| 1.6 | Sample Rotator | Current Angle matches the rotator's real position | ☐ |
 | 1.7 | Settings tab | Motor SN# `27270114`, Rotator SN# `55524924`, PSU `COM4`, DMM `DMM`, PID period as in `config.yaml` | ☐ |
 | 1.8 | `logs/` | A new `YYYYMMDD_HHMMSS.csv` was created and grows once per `logging.interval_s` | ☐ |
 
-## 2. Z stage (Manual tab)
+## 2. Z stage (Z-Controller, TourBox GUI / Kinesis GUI tabs)
 
 | # | Step | Expected | Result |
 |---|---|---|---|
@@ -75,13 +75,13 @@ Use the TourBox with the **TransferStageControl** preset active in TourBox Conso
 |---|---|---|---|---|
 | 3.1 | Tall (hold) | `Ctrl+F2` | Jogs Z up while held, stops on release | ☐ |
 | 3.2 | Short (hold) | `Ctrl+F3` | Jogs Z down while held, stops on release | ☐ |
-| 3.3 | Knob clockwise | `Ctrl+F4` | Speed increases by 5 % of max per click | ☐ |
+| 3.3 | Knob clockwise | `Ctrl+F4` | Speed Knob moves one position; Set Speed shows the new speed | ☐ |
 | 3.4 | Knob counter-clockwise | `Ctrl+F5` | Speed decreases | ☐ |
 | 3.5 | Top | `Ctrl+F6` | Cancel Motion | ☐ |
 | 3.6 | Side / Side + Top | `Ctrl+F1` | Toggles Safe Lock | ☐ |
 | 3.7 | Hold Tall, then click another window (Alt+Tab) | | Jog stops when the app loses focus | ☐ |
 
-## 4. Rotator (Manual tab)
+## 4. Rotator (Sample Rotator)
 
 | # | Step | Expected | Result |
 |---|---|---|---|
@@ -90,7 +90,7 @@ Use the TourBox with the **TransferStageControl** preset active in TourBox Conso
 | 4.3 | **Set Angle** 0° | Returns to 0° | ☐ |
 | 4.4 | Save a preset (Z + angle), move elsewhere, go to the preset | Both axes return to the saved values; the preset is still there after a restart | ☐ |
 
-## 5. Temperature control (Temperature tab)
+## 5. Temperature control (Temperature Control + Settings tab)
 
 Use moderate temperatures (≤ 100 °C) for this section.
 

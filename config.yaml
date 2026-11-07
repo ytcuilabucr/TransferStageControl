@@ -25,6 +25,9 @@ pid:
 ramp:
   default_rate_deg_min: 10.0  # 0 = step change
 
+motion:
+  speed_steps_um_s: [1.0, 10.0, 20.0, 50.0, 200.0]  # Z speeds for Speed Knob positions 0..4
+
 limits:
   t_max_c: 300.0     # over-temperature trip, °C (max 300)
   v_max: 24.0        # PSU voltage cap, V (max 24)
@@ -45,4 +48,4 @@ logging:
   dir: logs
   interval_s: 1.0  # data-log sample interval
 
-presets: []        # named Z + angle positions saved from the Manual tab: [{name, z_um, angle_deg}, ...]
+presets: []        # named Z + angle positions saved from the Kinesis GUI tab: [{name, z_um, angle_deg}, ...]

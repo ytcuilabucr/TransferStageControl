@@ -7,8 +7,8 @@ action          TourBox control      default key
 ==============  ===================  =======================================================
 safe_lock       Side (+ Top)         Ctrl+F1         toggle Safe Lock
 cancel_motion   Top                  Ctrl+F6         stop Z and rotator immediately
-speed_up        Knob clockwise       Ctrl+F4         +5 % of max speed, applied at once
-speed_down      Knob counter-cw      Ctrl+F5         −5 % of max speed, applied at once
+speed_up        Knob clockwise       Ctrl+F4         Speed Knob +1 position (motion.speed_steps_um_s)
+speed_down      Knob counter-cw      Ctrl+F5         Speed Knob −1 position
 jog_up          Tall (hold)          Ctrl+F2         jog Z up while held
 jog_down        Short (hold)         Ctrl+F3         jog Z down while held
 ==============  ===================  =======================================================
@@ -24,7 +24,7 @@ release of the same key; auto-repeat presses/releases are ignored. The release
 is matched on the key alone, because the TourBox may release the modifiers
 first. If the app loses focus during a jog, the jog is stopped. Matched keys are
 consumed so they do not also reach the focused widget. Nothing fires while a
-key-sequence editor (Settings tab) has focus.
+key-sequence editor (Config tab) has focus.
 """
 
 from __future__ import annotations

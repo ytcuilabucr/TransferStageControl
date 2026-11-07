@@ -8,6 +8,7 @@ The limit fields cannot be set above the hard limits (300 °C, 24 V).
 from __future__ import annotations
 
 import copy
+import dataclasses
 import logging
 
 from PyQt5.QtCore import pyqtSignal
@@ -239,6 +240,7 @@ class SettingsTab(QWidget):
                 "output_high": self.out_hi.value(),
             },
             "ramp": {"default_rate_deg_min": self.rate.value()},
+            "motion": dataclasses.asdict(base.motion),
             "limits": {
                 "t_max_c": min(self.t_max.value(), HARD_T_MAX_C),
                 "v_max": min(self.v_max.value(), HARD_V_MAX),

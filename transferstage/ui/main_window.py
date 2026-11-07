@@ -1,25 +1,51 @@
-"""Main window: Manual / Temperature / Settings / Log tabs, status bar, shortcuts, shutdown."""
+"""Main window, laid out like the LabVIEW front panel (gui_v2.vi).
+
+    [Stop]
+    Z-Controller        | TourBox GUI | Kinesis GUI | Settings | ... |   PV/SP legend
+    Temperature Control |   (centre tab pages)                      |   temperature chart
+    Sample Rotator      |   TourBox shortcut legend                 |   voltage chart
+
+Status bar: device connection LEDs, simulated devices, alarm state.
+"""
 
 from __future__ import annotations
 
 import logging
 
-from PyQt5.QtCore import QTimer
-from PyQt5.QtGui import QCloseEvent
-from PyQt5.QtWidgets import QLabel, QMainWindow, QMessageBox, QTabWidget
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QCloseEvent, QColor, QIcon, QKeySequence, QPixmap
+from PyQt5.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..app import DEVICE_NAMES, AppController
 from ..config import PROJECT_ROOT
 from .input_map import InputMap
 from .log_tab import LogTab
-from .manual_tab import ManualTab
+from .manual_tab import ManualPanel
 from .settings_tab import SettingsTab
-from .temperature_tab import TemperatureTab
-from .widgets import AMBER, GREEN, RED, Led
+from .temperature_tab import TemperaturePanel
+from .widgets import AMBER, GREEN, PANEL_STYLE, RED, Led
 
 log = logging.getLogger(__name__)
 
 DEVICE_LABELS = {"z": "Z", "rotator": "Rotator", "psu": "PSU", "thermometer": "DMM"}
+
+# TourBox control -> action, in the order of the LabVIEW legend
+LEGEND = (
+    ("[Side] + [Top]", "Safe Lock", "safe_lock"),
+    ("[Top]", "Cancel Motion", "cancel_motion"),
+    ("[Knob]", "Speed Knob", None),
+    ("[Tall]", "Moving Up", "jog_up"),
+    ("[Short]", "Moving Down", "jog_down"),
+)
 
 
 class MainWindow(QMainWindow):
@@ -28,19 +54,76 @@ class MainWindow(QMainWindow):
         self.c = controller
         self.confirm_close = confirm_close
         self.setWindowTitle("Transfer Stage Control")
-        self.resize(1400, 860)
+        self.setStyleSheet(PANEL_STYLE)
+        self.resize(1500, 880)
 
-        self.tabs = QTabWidget()
-        self.manual = ManualTab(controller)
-        self.temperature = TemperatureTab(controller)
+        self.manual = ManualPanel(controller, self)
+        self.temperature = TemperaturePanel(controller, self)
         self.settings = SettingsTab(controller)
         log_dir = controller.datalog.directory if controller.datalog is not None else PROJECT_ROOT / "logs"
         self.log_tab = LogTab(log_dir)
-        self.tabs.addTab(self.manual, "Manual")
-        self.tabs.addTab(self.temperature, "Temperature")
-        self.tabs.addTab(self.settings, "Settings")
+
+        central = QWidget()
+        central.setObjectName("panel")
+        root = QVBoxLayout(central)
+        root.addWidget(self.temperature.alarm_banner)
+
+        top = QHBoxLayout()
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setToolTip("Stop all motion and switch the PSU output off")
+        self.stop_btn.setMinimumSize(110, 36)
+        self.stop_btn.setStyleSheet(
+            "QPushButton { font-weight:bold; font-size:11pt; border:1px solid #888; border-radius:3px;"
+            " background:#f0f0f0; padding:4px 12px; }"
+            "QPushButton:hover { background:#fafafa; }"
+        )
+        red_square = QPixmap(16, 16)
+        red_square.fill(QColor(RED))
+        self.stop_btn.setIcon(QIcon(red_square))
+        self.stop_btn.clicked.connect(self.stop_all)
+        top.addWidget(self.stop_btn)
+        top.addStretch(1)
+        root.addLayout(top)
+
+        body = QHBoxLayout()
+        # left column
+        left = QVBoxLayout()
+        left.addWidget(self.manual.z_panel, 3)
+        left.addSpacing(10)
+        left.addWidget(self.temperature.control_panel)
+        left.addSpacing(10)
+        left.addWidget(self.manual.rotator_panel)
+        left.addStretch(1)
+        left_w = QWidget()
+        left_w.setLayout(left)
+        left_w.setFixedWidth(360)
+        body.addWidget(left_w)
+
+        # centre: tabs + shortcut legend
+        centre = QVBoxLayout()
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet("QTabWidget::pane { background:white; border:1px solid #a0a0a0; }")
+        self.tabs.addTab(self.manual.tourbox_page, "TourBox GUI")
+        self.tabs.addTab(self.manual.kinesis_page, "Kinesis GUI")
+        self.tabs.addTab(self.temperature.settings_page, "Settings")
+        self.tabs.addTab(self.temperature.profile_page, "Profile")
+        self.tabs.addTab(self.temperature.autotune_page, "Autotune")
+        self.tabs.addTab(self.settings, "Config")
         self.tabs.addTab(self.log_tab, "Log")
-        self.setCentralWidget(self.tabs)
+        centre.addWidget(self.tabs, 1)
+        self.legend_label = QLabel()
+        self.legend_label.setTextFormat(Qt.RichText)
+        centre.addWidget(self.legend_label, alignment=Qt.AlignHCenter)
+        centre_w = QWidget()
+        centre_w.setLayout(centre)
+        centre_w.setMinimumWidth(560)
+        body.addWidget(centre_w, 3)
+
+        # right: charts
+        body.addWidget(self.temperature.charts, 4)
+        root.addLayout(body, 1)
+        self.setCentralWidget(central)
+        self._update_legend(controller.config.keys)
 
         self._build_status_bar()
 
@@ -126,6 +209,24 @@ class MainWindow(QMainWindow):
     def _on_settings_saved(self, cfg) -> None:
         self.input_map.set_bindings(cfg.keys)
         self.c.config.keys = dict(cfg.keys)
+        self._update_legend(cfg.keys)
+
+    def _update_legend(self, keys: dict[str, str]) -> None:
+        lines = []
+        for control, what, action in LEGEND:
+            key = keys.get(action, "") if action else ""
+            key = QKeySequence(key, QKeySequence.PortableText).toString(QKeySequence.NativeText) if key else ""
+            text = f"{control} - {what}" + (f"  <span style='color:#666'>({key})</span>" if key else "")
+            if action == "cancel_motion":
+                text = f"<span style='color:{RED}'>{text}</span>"
+            lines.append(text)
+        self.legend_label.setText("<br>".join(lines))
+
+    def stop_all(self) -> None:
+        """Stop button: cancel all motion and switch the heater (PSU output) off."""
+        self.c.cancel_motion.emit()
+        self.c.set_psu_enabled.emit(False)
+        self._notify("STOP: motion cancelled, PSU output off")
 
     # ------------------------------------------------------------------ shutdown
 

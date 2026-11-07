@@ -86,7 +86,7 @@ difference: check the closed-loop test instead.
 
 1. **LabVIEW run.** Close the Python app. Start `ThermalControl.vi` with the fixed gains, PSU on, apply the step
    to 80 °C, and hold 20 min while logging. Turn the PSU off and let it cool to room temperature.
-2. **Python run.** Close LabVIEW. In the Python app, Temperature tab: enter the same Kc/Ti/Td, PSU On, set point 80, ramp 0,
+2. **Python run.** Close LabVIEW. In the Python app, Settings tab: enter the same Kc/Ti/Td, PSU On, set point 80, ramp 0,
    **Set**. Hold 20 min, then PSU Off. Note the session CSV name.
 3. Trim both files to the step (from just before the set-point change to the end of the hold) with
    `--start/--end` if needed, and compare:

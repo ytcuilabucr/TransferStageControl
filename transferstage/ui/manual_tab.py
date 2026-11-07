@@ -1,13 +1,23 @@
-"""Manual (TourBox) tab: Z jog/speed/position, rotator angle, presets, homing."""
+"""Motion panels, laid out like the LabVIEW front panel (gui_v2.vi).
+
+``ManualPanel`` owns the widgets for the Z stage and the rotator and hands them
+to the main window as separate pieces:
+
+* ``z_panel``        – left column "Z-Controller": status, set/current speed, position slide
+* ``rotator_panel``  – left column "Sample Rotator": current angle, set angle
+* ``tourbox_page``   – centre tab "TourBox GUI": Safe Lock, Cancel, speed settings + knob, jog
+* ``kinesis_page``   – centre tab "Kinesis GUI": move to / homing / position presets
+"""
 
 from __future__ import annotations
 
 import logging
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QDial,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -17,7 +27,6 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -25,181 +34,235 @@ from PyQt5.QtWidgets import (
 from ..app import AppController
 from ..control.motion import MotionStatus
 from ..drivers.base import MotorState
-from .widgets import AMBER, BLUE, GREEN, RED, Led, fmt, spin
+from .widgets import AMBER, GREEN, LED_GREEN_OFF, RED, Led, VerticalGauge, fmt, indicator, section, spin
 
 log = logging.getLogger(__name__)
 
-SLIDER_STEPS = 1000
+N_SPEEDS = 5
 
 
 def _since(seconds: float) -> str:
     s = int(seconds)
+    if s < 60:
+        return f"{s} s"
     h, rem = divmod(s, 3600)
     m, s = divmod(rem, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
-class ManualTab(QWidget):
+class ManualPanel(QObject):
     message = pyqtSignal(str)  # short status-bar notices
 
-    SPEED_STEP_FRACTION = 0.05  # speed_up / speed_down change the speed by 5 % of max velocity
-
-    def __init__(self, controller: AppController, parent: QWidget | None = None) -> None:
+    def __init__(self, controller: AppController, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.c = controller
         lim = controller.config.limits
         self.z_min, self.z_max = lim.z_min_um, lim.z_max_um
-        self._max_speed: float | None = None
         self._last_status: MotionStatus | None = None
         self._prev_z: float | None = None
+        self._speed_applied = False
 
-        root = QHBoxLayout(self)
-        root.addWidget(self._build_z_group(), 3)
-        right = QVBoxLayout()
-        right.addWidget(self._build_rotator_group())
-        right.addWidget(self._build_presets_group(), 1)
-        root.addLayout(right, 2)
+        self.z_panel = self._build_z_panel()
+        self.rotator_panel = self._build_rotator_panel()
+        self.tourbox_page = self._build_tourbox_page()
+        self.kinesis_page = self._build_kinesis_page()
 
         self._load_presets()
-        self._init_max_speed()
+        self._update_set_speed_label()
 
-    # ------------------------------------------------------------------ layout
+    # ------------------------------------------------------------------ left column
 
-    def _build_z_group(self) -> QGroupBox:
-        g = QGroupBox("Z stage")
-        grid = QGridLayout(g)
+    def _build_z_panel(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        self.z_status = indicator("—", 80)
+        v.addWidget(section("Z-Controller", extra=self.z_status))
 
-        big = QFont()
-        big.setPointSize(12)
-        big.setBold(True)
+        grid = QGridLayout()
+        self.set_speed_label = indicator("—")
+        self.speed_label = indicator("—")
+        self.z_gauge = VerticalGauge(self.z_min / 1000.0, self.z_max / 1000.0)
+        self.z_gauge.setToolTip("Z position (mm) between the soft limits")
+        self.z_label = indicator("—", 100)
+        left = QVBoxLayout()
+        left.addWidget(QLabel("Set Speed"))
+        left.addWidget(self.set_speed_label)
+        left.addSpacing(8)
+        left.addWidget(QLabel("Current Speed"))
+        left.addWidget(self.speed_label)
+        left.addStretch(1)
+        right = QVBoxLayout()
+        right.addWidget(QLabel("Z-Position"))
+        right.addWidget(self.z_label)
+        right.addStretch(1)
+        grid.addLayout(left, 0, 0)
+        grid.addWidget(self.z_gauge, 0, 1)
+        grid.addLayout(right, 0, 2)
+        grid.setColumnStretch(2, 1)
+        v.addLayout(grid)
+        return w
 
-        # jog buttons (press-and-hold)
-        self.up_btn = QPushButton("▲  Up")
-        self.down_btn = QPushButton("▼  Down")
-        for b in (self.up_btn, self.down_btn):
-            b.setFont(big)
-            b.setMinimumHeight(56)
-            b.setAutoRepeat(False)
-        self.up_btn.pressed.connect(lambda: self.c.jog_start.emit(1))
-        self.down_btn.pressed.connect(lambda: self.c.jog_start.emit(-1))
-        self.up_btn.released.connect(self.c.jog_stop.emit)
-        self.down_btn.released.connect(self.c.jog_stop.emit)
+    def _build_rotator_panel(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        self.rot_status = QLabel("—")
+        v.addWidget(section("Sample Rotator", extra=self.rot_status))
+        grid = QGridLayout()
+        self.angle_label = indicator("—")
+        self.angle_spin = spin(-360, 360, 0, decimals=2, step=1, suffix=" °")
+        self.set_angle_btn = QPushButton("✔ Set")
+        self.set_angle_btn.clicked.connect(lambda: self.c.rotate_to.emit(self.angle_spin.value()))
+        grid.addWidget(QLabel("Current Angle"), 0, 0, Qt.AlignRight)
+        grid.addWidget(self.angle_label, 0, 1)
+        grid.addWidget(QLabel("Set Angle"), 1, 0, Qt.AlignRight)
+        grid.addWidget(self.angle_spin, 1, 1)
+        grid.addWidget(self.set_angle_btn, 1, 2)
+        grid.setColumnStretch(1, 1)
+        v.addLayout(grid)
+        return w
 
-        jog = QVBoxLayout()
-        jog.addWidget(self.up_btn)
-        jog.addWidget(self.down_btn)
-        ind = QHBoxLayout()
-        self.up_led = Led("Up", BLUE)
-        self.down_led = Led("Down", BLUE)
-        self.busy_led = Led("Busy", AMBER)
-        for w in (self.up_led, self.down_led, self.busy_led):
-            ind.addWidget(w)
-        jog.addLayout(ind)
+    # ------------------------------------------------------------------ TourBox GUI tab
 
-        # cancel + safe lock
-        self.cancel_btn = QPushButton("Cancel Motion")
-        self.cancel_btn.setMinimumHeight(40)
-        self.cancel_btn.setStyleSheet(f"QPushButton {{ background:{RED}; color:white; font-weight:bold; }}")
-        self.cancel_btn.clicked.connect(self.c.cancel_motion.emit)
-        self.safe_lock_btn = QPushButton("Safe Lock")
+    def _build_tourbox_page(self) -> QWidget:
+        w = QWidget()
+        root = QVBoxLayout(w)
+
+        top = QHBoxLayout()
+        self.safe_lock_btn = QPushButton("🔒  Safe Lock")
         self.safe_lock_btn.setCheckable(True)
-        self.safe_lock_btn.setMinimumHeight(40)
+        self.safe_lock_btn.setMinimumSize(120, 38)
         self.safe_lock_btn.setStyleSheet(
             f"QPushButton:checked {{ background:{AMBER}; color:black; font-weight:bold; }}"
         )
         self.safe_lock_btn.toggled.connect(self._on_safe_lock_toggled)
-        jog.addWidget(self.cancel_btn)
-        jog.addWidget(self.safe_lock_btn)
-        jog.addStretch(1)
-        grid.addLayout(jog, 0, 0, 2, 1)
+        self.cancel_btn = QPushButton("✖  Cancel")
+        self.cancel_btn.setMinimumSize(120, 38)
+        self.cancel_btn.setStyleSheet(f"QPushButton {{ color:{RED}; font-weight:bold; }}")
+        self.cancel_btn.clicked.connect(self.c.cancel_motion.emit)
+        top.addSpacing(40)
+        top.addWidget(self.safe_lock_btn)
+        top.addWidget(self.cancel_btn)
+        top.addStretch(1)
+        root.addLayout(top)
+        root.addSpacing(16)
 
-        # speed knob
-        sp = QVBoxLayout()
-        sp.addWidget(QLabel("Speed (µm/s)"), alignment=Qt.AlignHCenter)
-        self.speed_dial = QDial()
-        self.speed_dial.setNotchesVisible(True)
-        self.speed_dial.setWrapping(False)
-        self.speed_dial.setMinimumSize(130, 130)
-        self.speed_dial.setRange(1, 2600)
-        self.speed_spin = spin(1, 2600, 500, decimals=0, step=10, suffix=" µm/s")
-        self.speed_dial.valueChanged.connect(lambda v: self.speed_spin.setValue(v))
-        self.speed_spin.valueChanged.connect(lambda v: self.speed_dial.setValue(int(round(v))))
-        self.set_speed_btn = QPushButton("Set Speed")
-        self.set_speed_btn.clicked.connect(self.apply_speed)
-        self.speed_label = QLabel("Current: —")
-        sp.addWidget(self.speed_dial, alignment=Qt.AlignHCenter)
-        sp.addWidget(self.speed_spin)
-        sp.addWidget(self.set_speed_btn)
-        sp.addWidget(self.speed_label)
-        sp.addStretch(1)
-        grid.addLayout(sp, 0, 1, 2, 1)
+        mid = QHBoxLayout()
+        # speed settings column
+        sv = QVBoxLayout()
+        sv.addWidget(QLabel("Speed Settings\n(µm/s)"))
+        box = QFrame()
+        box.setFrameShape(QFrame.Box)
+        bv = QVBoxLayout(box)
+        bv.setContentsMargins(4, 4, 4, 4)
+        bv.setSpacing(2)
+        self.speed_steps = []
+        for i, val in enumerate(self.c.config.motion.speed_steps_um_s):
+            sp = spin(0.1, 1e5, val, decimals=1, step=1)
+            sp.setButtonSymbols(sp.NoButtons)
+            sp.setAlignment(Qt.AlignRight)
+            sp.setMaximumWidth(80)
+            sp.setToolTip(f"Speed for knob position {i}")
+            sp.editingFinished.connect(self._on_speed_steps_edited)
+            self.speed_steps.append(sp)
+            bv.addWidget(sp)
+        sv.addWidget(box)
+        sv.addStretch(1)
+        mid.addLayout(sv)
 
-        # position slide + readouts
-        pos = QVBoxLayout()
-        pos.addWidget(QLabel(f"Z position\n{self.z_max:g} µm"), alignment=Qt.AlignHCenter)
-        self.z_slider = QSlider(Qt.Vertical)
-        self.z_slider.setRange(0, SLIDER_STEPS)
-        self.z_slider.setEnabled(False)  # indicator only
-        self.z_slider.setMinimumHeight(220)
-        pos.addWidget(self.z_slider, 1, alignment=Qt.AlignHCenter)
-        pos.addWidget(QLabel(f"{self.z_min:g} µm"), alignment=Qt.AlignHCenter)
-        grid.addLayout(pos, 0, 2, 2, 1)
+        # speed knob 0..4
+        kv = QVBoxLayout()
+        lab = QLabel("Speed Knob")
+        lab.setAlignment(Qt.AlignHCenter)
+        kv.addWidget(lab)
+        self.speed_knob = QDial()
+        self.speed_knob.setRange(0, N_SPEEDS - 1)
+        self.speed_knob.setNotchesVisible(True)
+        self.speed_knob.setWrapping(False)
+        self.speed_knob.setPageStep(1)
+        self.speed_knob.setFixedSize(140, 140)
+        self.speed_knob.setValue(2)
+        self.speed_knob.valueChanged.connect(self._on_knob)
+        kv.addWidget(self.speed_knob, alignment=Qt.AlignHCenter)
+        self.knob_pos_label = QLabel()
+        self.knob_pos_label.setAlignment(Qt.AlignHCenter)
+        kv.addWidget(self.knob_pos_label)
+        kv.addStretch(1)
+        mid.addLayout(kv, 1)
+        root.addLayout(mid)
 
-        info = QGridLayout()
-        mono = QFont("Consolas")
-        mono.setPointSize(14)
-        self.z_label = QLabel("—")
-        self.z_label.setFont(mono)
-        self.z_status = QLabel("—")
-        self.z_status.setFont(big)
-        self.since_label = QLabel("—")
-        info.addWidget(QLabel("Z (µm):"), 0, 0)
-        info.addWidget(self.z_label, 0, 1)
-        info.addWidget(QLabel("Z-status:"), 1, 0)
-        info.addWidget(self.z_status, 1, 1)
-        info.addWidget(QLabel("Since last motion:"), 2, 0)
-        info.addWidget(self.since_label, 2, 1)
+        # jog buttons (press-and-hold) with LEDs
+        bottom = QHBoxLayout()
+        bottom.addStretch(1)
+        big = QFont()
+        big.setPointSize(20)
+        self.up_btn = QPushButton("▲")
+        self.down_btn = QPushButton("▼")
+        self.up_led = Led("", GREEN, off_color=LED_GREEN_OFF)
+        self.down_led = Led("", GREEN, off_color=LED_GREEN_OFF)
+        for b, led, tip in ((self.up_btn, self.up_led, "Jog up (hold)"), (self.down_btn, self.down_led, "Jog down (hold)")):
+            b.setFont(big)
+            b.setFixedSize(52, 76)
+            b.setAutoRepeat(False)
+            b.setToolTip(tip)
+            col = QVBoxLayout()
+            col.addWidget(b)
+            col.addWidget(led, alignment=Qt.AlignHCenter)
+            bottom.addLayout(col)
+        self.up_btn.setStyleSheet("QPushButton { color:#3cb371; }")
+        self.down_btn.setStyleSheet("QPushButton { color:#3cb371; }")
+        self.up_btn.pressed.connect(lambda: self.c.jog_start.emit(1))
+        self.down_btn.pressed.connect(lambda: self.c.jog_start.emit(-1))
+        self.up_btn.released.connect(self.c.jog_stop.emit)
+        self.down_btn.released.connect(self.c.jog_stop.emit)
+        bottom.addSpacing(10)
+        root.addStretch(1)
+        root.addLayout(bottom)
+
+        since = QHBoxLayout()
+        since.addStretch(1)
+        self.busy_led = Led("Busy", AMBER)
+        since.addWidget(self.busy_led)
+        since.addSpacing(16)
+        since.addWidget(QLabel("Since Last Motion"))
+        self.since_label = indicator("—", 70)
+        since.addWidget(self.since_label)
+        root.addLayout(since)
+        return w
+
+    # ------------------------------------------------------------------ Kinesis GUI tab
+
+    def _build_kinesis_page(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        zg = QGroupBox(f"Z stage   (soft limits {self.z_min / 1000:g} – {self.z_max / 1000:g} mm)")
+        zgrid = QGridLayout(zg)
         self.move_spin = spin(self.z_min, self.z_max, self.z_min, decimals=1, step=10, suffix=" µm")
         self.move_btn = QPushButton("Move Z to")
         self.move_btn.clicked.connect(lambda: self.c.move_z_to.emit(self.move_spin.value()))
-        info.addWidget(self.move_btn, 3, 0)
-        info.addWidget(self.move_spin, 3, 1)
         self.home_z_btn = QPushButton("Home Z")
         self.home_z_btn.clicked.connect(self._home_z)
-        info.addWidget(self.home_z_btn, 4, 0, 1, 2)
-        info.setRowStretch(5, 1)
-        grid.addLayout(info, 0, 3, 2, 1)
-        grid.setColumnStretch(3, 1)
-        return g
+        zgrid.addWidget(self.move_btn, 0, 0)
+        zgrid.addWidget(self.move_spin, 0, 1)
+        zgrid.addWidget(self.home_z_btn, 0, 2)
+        zgrid.setColumnStretch(1, 1)
+        v.addWidget(zg)
 
-    def _build_rotator_group(self) -> QGroupBox:
-        g = QGroupBox("Rotator")
-        grid = QGridLayout(g)
-        self.angle_spin = spin(-360, 360, 0, decimals=2, step=1, suffix=" °")
-        self.set_angle_btn = QPushButton("Set Angle")
-        self.set_angle_btn.clicked.connect(lambda: self.c.rotate_to.emit(self.angle_spin.value()))
-        mono = QFont("Consolas")
-        mono.setPointSize(14)
-        self.angle_label = QLabel("—")
-        self.angle_label.setFont(mono)
-        self.rot_status = QLabel("—")
+        rg = QGroupBox("Rotator")
+        rh = QHBoxLayout(rg)
         self.home_rot_btn = QPushButton("Home Rotator")
         self.home_rot_btn.clicked.connect(self._home_rotator)
-        grid.addWidget(QLabel("Set Angle:"), 0, 0)
-        grid.addWidget(self.angle_spin, 0, 1)
-        grid.addWidget(self.set_angle_btn, 0, 2)
-        grid.addWidget(QLabel("Current Angle:"), 1, 0)
-        grid.addWidget(self.angle_label, 1, 1)
-        grid.addWidget(self.rot_status, 1, 2)
-        grid.addWidget(self.home_rot_btn, 2, 0, 1, 3)
-        return g
+        rh.addWidget(self.home_rot_btn)
+        rh.addStretch(1)
+        v.addWidget(rg)
 
-    def _build_presets_group(self) -> QGroupBox:
-        g = QGroupBox("Position presets (Z + angle)")
-        v = QVBoxLayout(g)
+        pg_ = QGroupBox("Position presets (Z + angle)")
+        pv = QVBoxLayout(pg_)
         self.preset_list = QListWidget()
         self.preset_list.itemDoubleClicked.connect(lambda _: self.goto_preset())
-        v.addWidget(self.preset_list, 1)
+        pv.addWidget(self.preset_list, 1)
         h = QHBoxLayout()
         self.save_preset_btn = QPushButton("Save current…")
         self.goto_preset_btn = QPushButton("Go to")
@@ -209,30 +272,47 @@ class ManualTab(QWidget):
         self.delete_preset_btn.clicked.connect(self.delete_preset)
         for b in (self.save_preset_btn, self.goto_preset_btn, self.delete_preset_btn):
             h.addWidget(b)
-        v.addLayout(h)
-        return g
+        pv.addLayout(h)
+        v.addWidget(pg_, 1)
+        return w
 
     # ------------------------------------------------------------------ speed
 
-    def _init_max_speed(self) -> None:
-        try:
-            mx = float(self.c.devices.z.max_velocity_um_s)
-        except Exception:  # noqa: BLE001 - not connected yet; retried on the first status
+    @property
+    def speed_index(self) -> int:
+        return int(self.speed_knob.value())
+
+    def selected_speed(self) -> float:
+        return float(self.speed_steps[self.speed_index].value())
+
+    def _update_set_speed_label(self) -> None:
+        self.set_speed_label.setText(f"{self.selected_speed():g} µm/s")
+        self.knob_pos_label.setText(f"position {self.speed_index}: {self.selected_speed():g} µm/s")
+        for i, sp in enumerate(self.speed_steps):
+            sp.setStyleSheet("QDoubleSpinBox { background:#fff3c4; font-weight:bold; }" if i == self.speed_index else "")
+
+    def _on_knob(self, _index: int) -> None:
+        self._update_set_speed_label()
+        self.apply_speed()
+
+    def _on_speed_steps_edited(self) -> None:
+        steps = [float(sp.value()) for sp in self.speed_steps]
+        if steps == list(self.c.config.motion.speed_steps_um_s):
             return
-        if mx > 0:
-            self._max_speed = mx
-            self.speed_dial.setRange(1, int(mx))
-            self.speed_spin.setRange(1, mx)
+        try:
+            self.c.save_speed_steps(steps)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self.tourbox_page, "Speed settings", f"Could not save speed settings:\n{exc}")
+            return
+        self._update_set_speed_label()
+        self.apply_speed()
 
     def apply_speed(self) -> None:
-        self.c.set_speed.emit(float(self.speed_spin.value()))
+        self.c.set_speed.emit(self.selected_speed())
 
     def nudge_speed(self, sign: int) -> None:
-        """TourBox knob: change the speed by a step and apply it immediately."""
-        mx = self._max_speed or float(self.speed_spin.maximum())
-        step = max(1.0, mx * self.SPEED_STEP_FRACTION)
-        self.speed_spin.setValue(self.speed_spin.value() + sign * step)
-        self.apply_speed()
+        """TourBox knob: move the Speed Knob one position and apply that speed."""
+        self.speed_knob.setValue(min(max(self.speed_index + (1 if sign > 0 else -1), 0), N_SPEEDS - 1))
 
     # ------------------------------------------------------------------ safe lock / homing
 
@@ -241,7 +321,7 @@ class ManualTab(QWidget):
         for w in (
             self.up_btn,
             self.down_btn,
-            self.set_speed_btn,
+            self.speed_knob,
             self.move_btn,
             self.home_z_btn,
             self.set_angle_btn,
@@ -255,13 +335,15 @@ class ManualTab(QWidget):
 
     def _home_z(self) -> None:
         if (
-            QMessageBox.question(self, "Home Z", "Home the Z stage? It will move to its hardware home position.")
+            QMessageBox.question(
+                self.kinesis_page, "Home Z", "Home the Z stage? It will move to its hardware home position."
+            )
             == QMessageBox.Yes
         ):
             self.c.home_z.emit()
 
     def _home_rotator(self) -> None:
-        if QMessageBox.question(self, "Home rotator", "Home the rotator?") == QMessageBox.Yes:
+        if QMessageBox.question(self.kinesis_page, "Home rotator", "Home the rotator?") == QMessageBox.Yes:
             self.c.home_rotator.emit()
 
     # ------------------------------------------------------------------ presets
@@ -280,7 +362,7 @@ class ManualTab(QWidget):
         try:
             self.c.save_presets(presets)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Presets", f"Could not save presets:\n{exc}")
+            QMessageBox.warning(self.kinesis_page, "Presets", f"Could not save presets:\n{exc}")
             return False
         self._load_presets()
         return True
@@ -288,10 +370,10 @@ class ManualTab(QWidget):
     def save_preset(self, name: str | None = None) -> None:
         st = self._last_status
         if st is None or st.z_um is None or st.rotator_deg is None:
-            QMessageBox.information(self, "Presets", "Position not known yet.")
+            QMessageBox.information(self.kinesis_page, "Presets", "Position not known yet.")
             return
         if name is None:
-            name, ok = QInputDialog.getText(self, "Save preset", "Preset name:")
+            name, ok = QInputDialog.getText(self.kinesis_page, "Save preset", "Preset name:")
             if not ok:
                 return
         name = name.strip()
@@ -316,7 +398,7 @@ class ManualTab(QWidget):
         if item is None:
             return
         name = item.data(Qt.UserRole)["name"]
-        if QMessageBox.question(self, "Delete preset", f"Delete preset '{name}'?") != QMessageBox.Yes:
+        if QMessageBox.question(self.kinesis_page, "Delete preset", f"Delete preset '{name}'?") != QMessageBox.Yes:
             return
         self._store([p for p in self._presets() if p["name"] != name])
 
@@ -324,19 +406,18 @@ class ManualTab(QWidget):
 
     def on_status(self, st: MotionStatus) -> None:
         self._last_status = st
-        if self._max_speed is None:
-            self._init_max_speed()
+        if not self._speed_applied and st.z_state is not MotorState.DISCONNECTED:
+            self._speed_applied = True
+            self.apply_speed()  # knob position at start-up = the speed in use
 
         z = st.z_um
-        self.z_label.setText(fmt(z, 2))
-        if z is not None:
-            frac = (z - self.z_min) / (self.z_max - self.z_min)
-            self.z_slider.setValue(int(round(min(max(frac, 0.0), 1.0) * SLIDER_STEPS)))
-        self.z_status.setText(st.z_state.value)
-        color = {MotorState.IDLE: GREEN, MotorState.ERROR: RED, MotorState.DISCONNECTED: RED}.get(st.z_state, AMBER)
+        self.z_label.setText(fmt(None if z is None else z / 1000.0, 4, "mm"))
+        self.z_gauge.set_value(None if z is None else z / 1000.0)
+        self.z_status.setText(st.z_state.value.capitalize())
+        color = {MotorState.IDLE: "#111", MotorState.ERROR: RED, MotorState.DISCONNECTED: RED}.get(st.z_state, "#b36b00")
         self.z_status.setStyleSheet(f"color:{color};")
         self.since_label.setText(_since(st.seconds_since_last_motion))
-        self.speed_label.setText(f"Current: {fmt(st.speed_um_s, 0, 'µm/s')}")
+        self.speed_label.setText(fmt(st.speed_um_s, 0, "µm/s"))
 
         moving_up = moving_down = False
         if st.jog_direction:
