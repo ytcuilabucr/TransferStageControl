@@ -122,6 +122,7 @@ class MotionWorker(QObject):
 
     def _locked(self, what: str) -> bool:
         if self._safe_lock:
+            log.info("motion: %s refused: safe lock is on", what)
             self.refused.emit(f"{what}: safe lock is on")
             return True
         return False
@@ -141,17 +142,21 @@ class MotionWorker(QObject):
         try:
             pos = self.z.position_um
         except Exception as exc:  # noqa: BLE001
+            log.error("motion: jog failed: %s", exc)
             self.error.emit(f"jog failed: {exc}")
             return
         if (pos >= target and d is Direction.UP) or (pos <= target and d is Direction.DOWN):
+            log.info("motion: jog %s refused at %g µm: soft limit %g µm", d.name.lower(), pos, target)
             self.refused.emit(f"jog {d.name.lower()}: at Z soft limit ({target:g} µm)")
             return
         if self._call("jog", self.z.move_to, target):
+            log.info("motion: jog %s from %g µm toward %g µm", d.name.lower(), pos, target)
             self._jog_dir = int(d)
             self._last_motion = self._clock()
 
     @pyqtSlot()
     def jog_stop(self) -> None:
+        log.info("motion: jog stop")
         self._jog_dir = 0
         self._call("stop Z", self.z.stop, True)
 

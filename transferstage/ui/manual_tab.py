@@ -310,6 +310,14 @@ class ManualPanel(QObject):
     def apply_speed(self) -> None:
         self.c.set_speed.emit(self.selected_speed())
 
+    def show_key_jog(self, direction: int) -> None:
+        """Mirror a TourBox Tall/Short hold on the ▲/▼ buttons (+1 up, -1 down, 0 released).
+
+        ``setDown`` only changes the look; it does not emit pressed/released, so no jog is re-sent.
+        """
+        self.up_btn.setDown(direction > 0)
+        self.down_btn.setDown(direction < 0)
+
     def nudge_speed(self, sign: int) -> None:
         """TourBox knob: move the Speed Knob one position and apply that speed."""
         self.speed_knob.setValue(min(max(self.speed_index + (1 if sign > 0 else -1), 0), N_SPEEDS - 1))

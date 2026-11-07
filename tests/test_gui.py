@@ -133,6 +133,61 @@ def test_jog_key_press_release_moves_and_stops(gui, qtbot):
     assert not window.input_map.jogging
 
 
+def test_jog_tourbox_tap_pair_moves_until_second_tap(gui, qtbot):
+    """TourBox sends an instant tap on button-down and another on button-up."""
+    window, controller, statuses = gui
+    z = controller.devices.z
+    imap = window.input_map
+    now = [100.0]
+    imap._clock = lambda: now[0]
+    start = z.position_um
+
+    # button down: press + release 2 ms apart
+    _key(window, QEvent.KeyPress, Qt.Key_F2)
+    now[0] += 0.002
+    _key(window, QEvent.KeyRelease, Qt.Key_F2)
+    qtbot.waitUntil(lambda: z.position_um > start + 20, timeout=3000)
+    assert imap.jogging and z.state is MotorState.MOVING
+    # the GUI ▲ button mirrors the held Tall button
+    assert window.manual.up_btn.isDown() and not window.manual.down_btn.isDown()
+
+    # button up: the second tap stops the jog
+    now[0] += 1.0
+    _key(window, QEvent.KeyPress, Qt.Key_F2)
+    now[0] += 0.002
+    _key(window, QEvent.KeyRelease, Qt.Key_F2)
+    qtbot.waitUntil(lambda: z.state is MotorState.IDLE, timeout=3000)
+    assert not imap.jogging
+    assert not window.manual.up_btn.isDown()
+
+    # the next button-down tap starts a new jog (state was reset)
+    stopped = z.position_um
+    _key(window, QEvent.KeyPress, Qt.Key_F3)
+    now[0] += 0.002
+    _key(window, QEvent.KeyRelease, Qt.Key_F3)
+    qtbot.waitUntil(lambda: z.position_um < stopped - 20, timeout=3000)
+    assert window.manual.down_btn.isDown() and not window.manual.up_btn.isDown()
+    _key(window, QEvent.KeyPress, Qt.Key_F3)
+    _key(window, QEvent.KeyRelease, Qt.Key_F3)
+    qtbot.waitUntil(lambda: z.state is MotorState.IDLE, timeout=3000)
+    assert not imap.jogging
+
+
+def test_jog_tap_stopped_by_focus_loss(gui, qtbot):
+    window, controller, _ = gui
+    imap = window.input_map
+    now = [100.0]
+    imap._clock = lambda: now[0]
+    _key(window, QEvent.KeyPress, Qt.Key_F2)
+    _key(window, QEvent.KeyRelease, Qt.Key_F2)
+    assert imap.jogging
+    assert window.manual.up_btn.isDown()
+    imap.eventFilter(window, QEvent(QEvent.ApplicationDeactivate))
+    assert not imap.jogging
+    assert not window.manual.up_btn.isDown()
+    qtbot.waitUntil(lambda: controller.devices.z.state is MotorState.IDLE, timeout=3000)
+
+
 def test_safe_lock_blocks_jog(gui, qtbot):
     window, controller, _ = gui
     z = controller.devices.z

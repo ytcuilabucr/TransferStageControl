@@ -159,6 +159,8 @@ class MainWindow(QMainWindow):
         self.input_map = InputMap(controller.config.keys, self)
         self.input_map.jog_start.connect(controller.jog_start.emit)
         self.input_map.jog_stop.connect(controller.jog_stop.emit)
+        self.input_map.jog_start.connect(self.manual.show_key_jog)  # ▲/▼ look pressed while Tall/Short is held
+        self.input_map.jog_stop.connect(lambda: self.manual.show_key_jog(0))
         self.input_map.action.connect(self._on_action)
         self.input_map.install()
 

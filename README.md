@@ -124,7 +124,11 @@ TourBox changes are needed (change the app side in Settings → Key bindings if 
 | Event mark in the session CSV | (assign a free button) | `Ctrl+F7` |
 
 The shortcuts work whenever an app window is focused. Jogs start on key press and stop on key
-release; auto-repeat is ignored, and a jog stops if the app loses focus. If the knob turns the speed the wrong way, swap the
+release; auto-repeat is ignored, and a jog stops if the app loses focus. TourBox Console does not
+hold the key while a button is held: it sends an instant tap when the button goes down and another
+when it comes up. A tap (released within 40 ms) therefore starts a jog that runs until the next tap
+of the same key. If a tap is ever missed, Z keeps going to the soft limit: press Top (Cancel Motion)
+or tap the button again. If the knob turns the speed the wrong way, swap the
 `speed_up` / `speed_down` keys.
 
 ### PID autotune
