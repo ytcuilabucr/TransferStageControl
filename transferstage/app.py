@@ -24,7 +24,7 @@ from .control.motion import MotionWorker
 from .control.safety import SafetyMonitor, safe_shutdown
 from .control.thermal import ThermalWorker
 from .control.threads import start_worker, stop_worker
-from .datalog import DataLogger
+from .datalog import DataLogger, run_metadata
 from .drivers import Devices, build_devices
 
 log = logging.getLogger(__name__)
@@ -104,6 +104,41 @@ class AppController(QObject):
         if self.datalog is not None:
             self.thermal.sample.connect(self.datalog.on_thermal)
             self.motion.status.connect(self.datalog.on_motion)
+        self._connect_action_log()
+
+    def _connect_action_log(self) -> None:
+        """Record every operator command in the application log (GUI thread, before the worker runs it)."""
+        act = logging.getLogger("transferstage.actions")
+
+        def on(sig, fmt):
+            sig.connect(lambda *a: act.info(fmt(*a)))
+
+        on(self.jog_start, lambda d: f"jog Z {'up' if d > 0 else 'down'}")
+        on(self.jog_stop, lambda: "jog Z stop")
+        on(self.move_z_to, lambda um: f"move Z to {um:g} µm")
+        on(self.set_speed, lambda v: f"Z speed {v:g} µm/s")
+        on(self.cancel_motion, lambda: "cancel motion")
+        on(self.rotate_to, lambda deg: f"rotate to {deg:g}°")
+        on(self.home_z, lambda: "home Z")
+        on(self.home_rotator, lambda: "home rotator")
+        on(self.set_safe_lock, lambda b: f"safe lock {'on' if b else 'off'}")
+        on(self.set_target, lambda t, r: f"set temperature {t:g} °C at {r:g} °C/min" if r > 0 else f"set temperature {t:g} °C (step)")
+        on(self.set_psu_enabled, lambda b: f"PSU output {'on' if b else 'off'}")
+        on(self.set_gains, lambda kc, ti, td: f"PID gains Kc={kc:g} Ti={ti:g} min Td={td:g} min")
+        on(self.reset_pid, lambda: "reset PID")
+        on(self.start_profile, lambda p: f"start profile {getattr(p, 'name', p)!r}")
+        on(self.stop_profile, lambda: "stop profile")
+        on(self.acknowledge_alarm, lambda: "acknowledge alarm")
+        on(self.start_autotune, lambda p: f"start autotune {p}")
+        on(self.cancel_autotune, lambda: "cancel autotune")
+
+    def mark(self, text: str = "") -> str | None:
+        """Write an event note to the session CSV and the app log. Returns the note (None without a data log)."""
+        if self.datalog is None:
+            note = " ".join(str(text).split()) or "mark"
+            log.info("MARK: %s (no data log)", note)
+            return None
+        return self.datalog.mark(text)
 
     def _on_thermal(self, sample) -> None:
         self.last_thermal = sample
@@ -121,8 +156,13 @@ class AppController(QObject):
         self._threads.append((self.motion, start_worker(self.motion, "motion")))
         self._threads.append((self.thermal, start_worker(self.thermal, "thermal")))
         if self.datalog is not None:
+            meta = run_metadata(
+                self.config,
+                config_file=str(self.config_path),
+                connect_errors={k: str(v) for k, v in self.connect_errors.items()},
+            )
             try:
-                self.datalog.start()
+                self.datalog.start(meta)
             except OSError as exc:
                 log.error("data log could not be started: %s", exc)
         return self.connect_errors

@@ -157,8 +157,13 @@ Don't heat toward 300 °C. Lower the limit temporarily instead:
 
 - [ ] Open the session CSV in Excel/Origin. The columns are: `timestamp, elapsed_s, temperature_c, target_sp_c,
   program_sp_c, v_cmd, v_read, i_read, psu_on, ramping, profile_segment, profile_phase, mode, z_um,
-  z_state, speed_um_s, rotator_deg, rotator_state, safe_lock, alarms`.
+  z_state, speed_um_s, rotator_deg, rotator_state, safe_lock, alarms, sample_age_s, note`.
 - [ ] Rows are at `logging.interval_s`, with no gaps longer than a few intervals.
+- [ ] `sample_age_s` stays below about one PID period during normal running.
+- [ ] Type a note and press **Mark**, then press the `mark` shortcut with the field empty: the CSV has
+  two extra rows with that note and `mark 2` in `note`, and `logs/app.log` has matching `MARK:` lines.
+- [ ] `YYYYMMDD_HHMMSS.meta.yaml` next to the CSV contains the configuration (PID gains, limits) of this run.
+- [ ] `logs/app.log` lists the commands given during the tests above (moves, set points, PSU on/off).
 - [ ] The ramps, the trip and the motion from the tests above are visible in the data.
 
 ## 8. Known limitation: process killed

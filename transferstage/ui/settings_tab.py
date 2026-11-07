@@ -45,6 +45,7 @@ KEY_HINTS = {
     "speed_down": "TourBox Knob counter-clockwise",
     "jog_up": "TourBox Tall (hold)",
     "jog_down": "TourBox Short (hold)",
+    "mark": "Event mark in the session CSV (any free TourBox button)",
 }
 
 

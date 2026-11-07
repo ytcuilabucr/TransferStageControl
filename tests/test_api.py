@@ -54,6 +54,21 @@ def test_example_runs_end_to_end_in_virtual_time(tmp_path):
     assert rows[-1]["psu_on"] == "0"
 
 
+def test_stage_mark_and_metadata(tmp_path):
+    with Stage(_cfg(tmp_path), virtual_time=True) as stage:
+        stage.sleep(3)
+        assert stage.mark("anneal start") == "anneal start"
+        stage.sleep(2)
+        path = stage.log_path
+    meta = path.with_suffix(".meta.yaml").read_text(encoding="utf-8")
+    assert "source: api" in meta and "virtual_time: true" in meta
+    with path.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    marked = [r for r in rows if r["note"]]
+    assert [r["note"] for r in marked] == ["anneal start"]
+    assert float(marked[0]["sample_age_s"]) < 1.0 and marked[0]["temperature_c"] != ""
+
+
 def test_stage_shuts_down_on_exit_and_on_exception(tmp_path):
     with pytest.raises(ZeroDivisionError):
         with Stage(_cfg(tmp_path), virtual_time=True, log=False) as stage:

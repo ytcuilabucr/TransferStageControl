@@ -99,8 +99,13 @@ Tabs:
   Limits cannot exceed 300 °C / 24 V.
 - **Log**: live application log, alarm history, button to open the data-log folder.
 
-Each session writes a CSV to `logs/YYYYMMDD_HHMMSS.csv`; the app log is `logs/app.log`
-(rotating, 5 × 5 MB). Closing the window (or an unhandled error) stops all motion, switches
+Each session writes a CSV to `logs/YYYYMMDD_HHMMSS.csv`, plus `YYYYMMDD_HHMMSS.meta.yaml` with the
+start time, version, connection errors and the full configuration used. CSV columns `sample_age_s`
+(seconds since the last thermal reading; it grows if the loop stalls) and `note` come last. Type a
+note in the **Note** field at the top and press **Mark** (or Enter, or the `mark` shortcut, Ctrl+F7)
+to write an extra row with that note at that moment; an empty note gives `mark 1`, `mark 2`, ….
+The app log is `logs/app.log` (rotating, 5 × 5 MB). It records every operator command (moves,
+jogs, set points, PSU on/off, PID gains, profiles) and every mark. Closing the window (or an unhandled error) stops all motion, switches
 the PSU off and closes the instruments; you are asked to confirm if the PSU is on.
 
 ### TourBox shortcuts
@@ -116,6 +121,7 @@ TourBox changes are needed (change the app side in Settings → Key bindings if 
 | Speed down | Knob counter-clockwise | `Ctrl+F5` |
 | Jog Z up while held | Tall | `Ctrl+F2` |
 | Jog Z down while held | Short | `Ctrl+F3` |
+| Event mark in the session CSV | (assign a free button) | `Ctrl+F7` |
 
 The shortcuts work whenever an app window is focused. Jogs start on key press and stop on key
 release; auto-repeat is ignored, and a jog stops if the app loses focus. If the knob turns the speed the wrong way, swap the
@@ -177,6 +183,7 @@ with Stage() as stage:                 # config.yaml; session CSV in logs/
     stage.set_temperature(150, rate_deg_min=20)
     stage.wait_for_temperature(tol_c=1, stable_s=60, timeout_s=3600)
     stage.rotate(90)
+    stage.mark("anneal start")         # note in the CSV `note` column and the log
     stage.sleep(600)                   # use stage.sleep, not time.sleep
     print(stage.readings())
 ```

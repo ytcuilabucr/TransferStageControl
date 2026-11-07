@@ -203,6 +203,31 @@ def test_presets_and_settings_save(gui, qtbot, tmp_path):
     assert window.input_map._combos[parse_shortcut("Ctrl+F9")] == "cancel_motion"
 
 
+def test_mark_and_action_log(gui, qtbot, caplog):
+    import csv
+    import logging
+
+    import yaml
+
+    window, controller, _ = gui
+    caplog.set_level(logging.INFO)
+    meta = yaml.safe_load(controller.datalog.meta_path.read_text(encoding="utf-8"))
+    assert meta["connect_errors"] == {} and meta["config"]["pid"]["period_ms"] == 100
+
+    window.temperature.psu_btn.click()
+    window.note_edit.setText("stamp contact")
+    window.mark_btn.click()
+    assert window.note_edit.text() == ""
+    _key(window, QEvent.KeyPress, Qt.Key_F7)  # mark shortcut, empty note
+    _key(window, QEvent.KeyRelease, Qt.Key_F7)
+
+    with controller.datalog.path.open(newline="", encoding="utf-8") as fh:
+        notes = [r["note"] for r in csv.DictReader(fh) if r["note"]]
+    assert notes == ["stamp contact", "mark 2"]
+    text = caplog.text
+    assert "PSU output on" in text and "MARK: stamp contact" in text and "MARK: mark 2" in text
+
+
 def test_close_runs_safe_shutdown(gui, qtbot):
     window, controller, _ = gui
     window.temperature.psu_btn.click()

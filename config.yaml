@@ -43,6 +43,7 @@ keys:              # action -> Qt shortcut string; match the TourBox Console map
   speed_down: Ctrl+F5
   jog_up: Ctrl+F2
   jog_down: Ctrl+F3
+  mark: Ctrl+F7               # event mark in the session CSV
 
 logging:
   dir: logs

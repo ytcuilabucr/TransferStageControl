@@ -17,6 +17,7 @@ from PyQt5.QtGui import QCloseEvent, QColor, QIcon, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -83,6 +84,16 @@ class MainWindow(QMainWindow):
         self.stop_btn.clicked.connect(self.stop_all)
         top.addWidget(self.stop_btn)
         top.addStretch(1)
+        top.addWidget(QLabel("Note:"))
+        self.note_edit = QLineEdit()
+        self.note_edit.setPlaceholderText("e.g. stamp contact (empty = numbered mark)")
+        self.note_edit.setMinimumWidth(280)
+        self.note_edit.returnPressed.connect(self.add_mark)
+        top.addWidget(self.note_edit)
+        self.mark_btn = QPushButton("Mark")
+        self.mark_btn.setToolTip("Write the note (or a numbered mark) to the session CSV and the log")
+        self.mark_btn.clicked.connect(self.add_mark)
+        top.addWidget(self.mark_btn)
         root.addLayout(top)
 
         body = QHBoxLayout()
@@ -141,6 +152,8 @@ class MainWindow(QMainWindow):
         for tab in (self.manual, self.temperature, self.settings):
             tab.message.connect(self._notify)
         self.settings.saved.connect(self._on_settings_saved)
+        if controller.datalog is not None:
+            controller.datalog.error.connect(lambda m: self._notify(m, error=True))
 
         # TourBox / keyboard
         self.input_map = InputMap(controller.config.keys, self)
@@ -205,6 +218,14 @@ class MainWindow(QMainWindow):
             self.manual.nudge_speed(+1)
         elif action == "speed_down":
             self.manual.nudge_speed(-1)
+        elif action == "mark":
+            self.add_mark()
+
+    def add_mark(self) -> None:
+        """Mark button / Enter in the note field / mark shortcut: event note in the CSV and the log."""
+        note = self.c.mark(self.note_edit.text())
+        self.note_edit.clear()
+        self._notify(f"Marked: {note}" if note is not None else "Marked in the log (data log is off)")
 
     def _on_settings_saved(self, cfg) -> None:
         self.input_map.set_bindings(cfg.keys)

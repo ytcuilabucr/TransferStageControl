@@ -11,6 +11,7 @@ speed_up        Knob clockwise       Ctrl+F4         Speed Knob +1 position (mot
 speed_down      Knob counter-cw      Ctrl+F5         Speed Knob −1 position
 jog_up          Tall (hold)          Ctrl+F2         jog Z up while held
 jog_down        Short (hold)         Ctrl+F3         jog Z down while held
+mark            (unassigned)         Ctrl+F7         write an event mark to the session CSV
 ==============  ===================  =======================================================
 
 These defaults match the "TransferStageControl" preset in TourBox Console
@@ -37,7 +38,7 @@ from PyQt5.QtWidgets import QApplication, QKeySequenceEdit
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("safe_lock", "cancel_motion", "speed_up", "speed_down", "jog_up", "jog_down")
+ACTIONS = ("safe_lock", "cancel_motion", "speed_up", "speed_down", "jog_up", "jog_down", "mark")
 JOG_ACTIONS = {"jog_up": 1, "jog_down": -1}
 REPEATABLE = {"speed_up", "speed_down"}  # knob turns may arrive as auto-repeat
 
@@ -60,7 +61,7 @@ def event_combo(ev: QKeyEvent) -> int:
 
 
 class InputMap(QObject):
-    action = pyqtSignal(str)  # safe_lock, cancel_motion, speed_up, speed_down
+    action = pyqtSignal(str)  # safe_lock, cancel_motion, speed_up, speed_down, mark
     jog_start = pyqtSignal(int)
     jog_stop = pyqtSignal()
 

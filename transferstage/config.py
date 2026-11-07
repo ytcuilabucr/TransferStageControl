@@ -157,6 +157,7 @@ def _default_keys() -> dict[str, str]:
         "speed_down": "Ctrl+F5",
         "jog_up": "Ctrl+F2",
         "jog_down": "Ctrl+F3",
+        "mark": "Ctrl+F7",  # event mark in the session CSV (not in the TourBox preset; assign a button if wanted)
     }
 
 

@@ -46,7 +46,7 @@ from .control.autotune import AutotuneParams, AutotuneResult, AutotuneState
 from .control.motion import MotionStatus
 from .control.safety import SafetyMonitor, safe_shutdown
 from .control.thermal import ThermalSample, ThermalWorker
-from .datalog import DataLogger
+from .datalog import DataLogger, run_metadata
 from .drivers import Devices, build_devices
 from .drivers.base import Direction, MotorState
 
@@ -168,7 +168,7 @@ class Stage:
             self.thermal.alarm.connect(lambda a: self._alarms.append(a.message))
             if self._want_log:
                 self.datalog = DataLogger.from_config(cfg.logging, clock=self.clock)
-                self.datalog.open()
+                self.datalog.open(run_metadata(cfg, source="api", virtual_time=self.virtual_time))
             self.period_s = cfg.pid.period_ms / 1000.0
             self._t0 = self.clock()
             self._next_log = self._t0
@@ -214,11 +214,24 @@ class Stage:
     def log_path(self) -> Path | None:
         return None if self.datalog is None else self.datalog.path
 
+    def mark(self, text: str = "") -> str:
+        """Write an event note (e.g. ``"stamp contact"``) to the session CSV ``note`` column and the log."""
+        self._check_open()
+        if self.datalog is None:
+            note = " ".join(str(text).split()) or "mark"
+            log.info("MARK: %s (no data log)", note)
+            return note
+        with self._lock:
+            self.datalog.on_motion(self._motion_status())
+            return self.datalog.mark(text)
+
     # ------------------------------------------------------------------ loop
 
     def _tick(self) -> None:
         with self._lock:
             self._last = self.thermal.step()
+            if self.datalog is not None:
+                self.datalog.on_thermal(self._last)  # every step, so sample_age_s and marks see the latest
             self._log_row()
 
     def _log_row(self, force: bool = False) -> None:
@@ -228,7 +241,6 @@ class Stage:
         if not force and now < self._next_log:
             return
         self._next_log = now + self.datalog.interval_s
-        self.datalog.on_thermal(self._last)
         self.datalog.on_motion(self._motion_status())
         self.datalog.write_row()
 

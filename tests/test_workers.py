@@ -426,3 +426,33 @@ def test_datalogger_from_config_relative_dir():
     logger = DataLogger.from_config(Config().logging)
     assert logger.directory.is_absolute() and logger.directory.name == "logs"
     assert logger.interval_s == 1.0
+
+
+def test_datalogger_mark_sample_age_and_metadata(tmp_path):
+    t = [100.0]
+    logger = DataLogger(tmp_path / "logs", 1.0, clock=lambda: t[0], now=lambda: datetime(2026, 11, 6, 15, 0, 0))
+    path = logger.open({"app_version": "x", "config": Config().to_dict()})
+    assert logger.meta_path == path.with_suffix(".meta.yaml")
+    import yaml
+
+    meta = yaml.safe_load(logger.meta_path.read_text(encoding="utf-8"))
+    assert meta["data_file"] == path.name and meta["config"]["logging"]["interval_s"] == 1.0
+
+    worker, *_ = _thermal()
+    sample = worker.step()
+    logger.write_row()  # no thermal sample yet: empty age
+    logger.on_thermal(sample)
+    t[0] = 101.0
+    logger.write_row()
+    t[0] = 105.5  # thermal loop stalled for 5.5 s
+    logger.write_row()
+    assert logger.mark("  stamp\ncontact ") == "stamp contact"
+    assert logger.mark() == "mark 2"
+    logger.close()
+    assert logger.mark("after close") == "after close"  # log closed: not written, must not raise
+
+    with path.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert [r["sample_age_s"] for r in rows] == ["", "1.000", "5.500", "5.500", "5.500"]
+    assert [r["note"] for r in rows] == ["", "", "", "stamp contact", "mark 2"]
+    assert list(rows[0].keys())[-2:] == ["sample_age_s", "note"]
