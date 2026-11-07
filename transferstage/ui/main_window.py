@@ -47,6 +47,8 @@ class MainWindow(QMainWindow):
         # worker -> GUI
         controller.motion.status.connect(self.manual.on_status)
         controller.thermal.sample.connect(self.temperature.on_sample)
+        controller.thermal.autotune_progress.connect(self.temperature.on_autotune_progress)
+        controller.thermal.autotune_finished.connect(self.temperature.on_autotune_finished)
         controller.thermal.sample.connect(self._on_sample)
         controller.thermal.alarm.connect(self.log_tab.add_alarm)
         for sig in (controller.motion.error, controller.thermal.error):

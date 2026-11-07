@@ -66,6 +66,45 @@ def test_set_temperature_starts_ramping(gui, qtbot):
     assert tab.psu_btn.isChecked()
 
 
+def test_autotune_panel_start_cancel_and_apply(gui, qtbot):
+    from transferstage.control.autotune import (
+        RECOMMENDED_RULE,
+        AutotuneResult,
+        AutotuneState,
+        AutotuneStatus,
+        gains_from_ultimate,
+    )
+
+    window, controller, _ = gui
+    tab = window.temperature
+    tab.psu_btn.click()
+    qtbot.waitUntil(lambda: controller.last_thermal.psu_on, timeout=3000)
+    tab.at_sp.setValue(30.0)
+    tab.at_bias.setValue(3.0)
+    tab.at_amp.setValue(2.0)
+    tab.at_start_btn.click()
+    qtbot.waitUntil(lambda: controller.last_thermal.mode == "autotune", timeout=3000)
+    qtbot.waitUntil(lambda: tab.at_cancel_btn.isEnabled(), timeout=3000)
+    assert not tab.at_start_btn.isEnabled() and "Autotune:" in tab.at_status.text()
+    assert controller.last_thermal.v_cmd in (pytest.approx(1.0), pytest.approx(5.0))
+
+    tab.at_cancel_btn.click()
+    qtbot.waitUntil(lambda: "aborted" in tab.at_status.text(), timeout=3000)
+    assert tab.at_start_btn.isEnabled() and not tab.at_apply_btn.isEnabled()
+    qtbot.waitUntil(lambda: controller.last_thermal.mode == "pid", timeout=3000)
+
+    # A finished run fills the table; Apply gains copies the recommended row into the PID.
+    result = AutotuneResult(2.0, 60.0, 1.0, 2.0, 0.05, gains_from_ultimate(2.0, 60.0))
+    tab.on_autotune_finished(AutotuneStatus(AutotuneState.DONE, 3, 3, 600.0, 0.0, "ok", result))
+    assert tab.at_apply_btn.isEnabled() and tab.at_progress.value() == 100
+    tab.at_apply_btn.click()
+    g = result.gains[RECOMMENDED_RULE]
+    assert tab.kc_spin.value() == pytest.approx(g.kc, abs=1e-4)
+    assert tab.ti_spin.value() == pytest.approx(g.ti_min, abs=1e-4)
+    qtbot.waitUntil(lambda: controller.thermal.pid.kc == pytest.approx(g.kc), timeout=3000)
+    assert controller.thermal.pid.ti_min == pytest.approx(g.ti_min)
+
+
 def test_jog_key_press_release_moves_and_stops(gui, qtbot):
     window, controller, statuses = gui
     z = controller.devices.z

@@ -37,6 +37,7 @@ COLUMNS = [
     "ramping",
     "profile_segment",
     "profile_phase",
+    "mode",
     "z_um",
     "z_state",
     "speed_um_s",
@@ -93,6 +94,15 @@ class DataLogger(QObject):
     @pyqtSlot()
     def start(self) -> Path:
         """Create the session file, write the header and start the row timer."""
+        path = self.open()
+        if self._timer is None:
+            self._timer = QTimer(self)
+            self._timer.timeout.connect(self.write_row)
+        self._timer.start(int(round(self.interval_s * 1000)))
+        return path
+
+    def open(self) -> Path:
+        """Create the session file and write the header, without a timer (call :meth:`write_row` yourself)."""
         if self._fh is None:
             self.directory.mkdir(parents=True, exist_ok=True)
             stem = self._now().strftime("%Y%m%d_%H%M%S")
@@ -108,10 +118,6 @@ class DataLogger(QObject):
             self.path = path
             self._t0 = self._clock()
             log.info("data log: %s", path)
-        if self._timer is None:
-            self._timer = QTimer(self)
-            self._timer.timeout.connect(self.write_row)
-        self._timer.start(int(round(self.interval_s * 1000)))
         return self.path
 
     @pyqtSlot()
@@ -148,7 +154,7 @@ class DataLogger(QObject):
         th, mo = self._thermal, self._motion
         row = [self._now().isoformat(timespec="milliseconds"), f"{self._clock() - self._t0:.3f}"]
         if th is None:
-            row += [""] * 10
+            row += [""] * 11
         else:
             row += [
                 _num(th.temperature_c, 3),
@@ -161,6 +167,7 @@ class DataLogger(QObject):
                 str(int(th.ramping)),
                 "" if th.profile_segment is None else str(th.profile_segment),
                 th.profile_phase or "",
+                th.mode,
             ]
         if mo is None:
             row += [""] * 6

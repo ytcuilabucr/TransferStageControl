@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import importlib
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..config import Config
@@ -91,22 +93,23 @@ def _load_real(module: str, cls_name: str, what: str, flag: str):
         raise NotImplementedError(f"transferstage.drivers.{module} does not define {cls_name}") from exc
 
 
-def build_devices(config: Config, *, time_scale: float = 1.0) -> Devices:
+def build_devices(config: Config, *, time_scale: float = 1.0, clock: Callable[[], float] = time.monotonic) -> Devices:
     """Create (but do not connect) the four devices described by ``config``.
 
     Each device is simulated when its ``devices.simulate.<name>`` flag is true.
-    ``time_scale`` speeds up the simulated thermal plant (for tests/demos).
+    ``time_scale`` speeds up the simulated thermal plant (for tests/demos); ``clock`` is the
+    time base of the simulators (pass a virtual clock to run them in simulated time).
     """
     dev = config.devices
     sim = dev.simulate
 
     if sim.z:
-        z: LinearStage = SimLinearStage()  # hardware travel 0–25 mm; soft limits are enforced by SafetyMonitor
+        z: LinearStage = SimLinearStage(clock=clock)  # hardware travel 0–25 mm; soft limits are enforced by SafetyMonitor
     else:
         z = _load_real("kinesis", "KinesisZStage", "Z stage (Kinesis)", "z")(dev.z_serial, dev.kinesis_path)
 
     if sim.rotator:
-        rotator: RotaryStage = SimRotaryStage()
+        rotator: RotaryStage = SimRotaryStage(clock=clock)
     else:
         rotator = _load_real("kinesis", "KinesisRotator", "rotator (Kinesis)", "rotator")(
             dev.rotator_serial, dev.kinesis_path
@@ -120,10 +123,10 @@ def build_devices(config: Config, *, time_scale: float = 1.0) -> Devices:
     plant = None
     if sim.dmm:
         if isinstance(psu, SimPowerSupply):
-            plant = SimThermalPlant(psu, time_scale=time_scale)
+            plant = SimThermalPlant(psu, time_scale=time_scale, clock=clock)
         else:
             log.warning("simulated thermometer with a real PSU: the simulated plant is not heated")
-            plant = SimThermalPlant(None, time_scale=time_scale)
+            plant = SimThermalPlant(None, time_scale=time_scale, clock=clock)
         thermometer: Thermometer = SimThermometer(plant)
     else:
         thermometer = _load_real("dmm", "DmmThermometer", "DMM thermometer", "dmm")(dev.dmm_visa)

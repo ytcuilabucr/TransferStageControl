@@ -94,6 +94,45 @@ The shortcuts work whenever an app window is focused. Jogs start on key press an
 release; auto-repeat is ignored, and a jog stops if the app loses focus. If the knob turns the speed the wrong way, swap the
 `speed_up` / `speed_down` keys.
 
+### PID autotune
+
+Temperature tab → **Autotune**. Hold the sample near the tuning temperature with the PSU on, then
+start: the PSU voltage switches between bias ± amplitude (clamped to 0 V and `limits.v_max`) around
+the set point until the oscillation repeats for the set number of cycles. Leave **Bias** at
+"Present output" to use the voltage that currently holds the set point. The table offers
+Ziegler–Nichols and Tyreus–Luyben gains (Ti and Td in minutes). Tyreus–Luyben PI is pre-selected
+because it is the conservative choice. **Apply gains** loads the selected row into the PID.
+
+The run aborts on a safety trip, on Cancel, on PSU off, on timeout, or if T rises more than
+"Max rise above SP" above the set point. After it ends, the PID holds the set point with the old gains.
+
+## Scripting API
+
+`transferstage.api.Stage` runs the instruments without the GUI, with the same PID and safety
+monitor. Leaving the `with` block, including after an exception or Ctrl+C, runs the safe shutdown.
+
+```python
+from transferstage.api import Stage
+
+with Stage() as stage:                 # config.yaml; session CSV in logs/
+    stage.home()
+    stage.move_z(5000)                 # µm, absolute; refused outside the soft limits
+    stage.psu_enabled(True)
+    stage.set_temperature(150, rate_deg_min=20)
+    stage.wait_for_temperature(tol_c=1, stable_s=60, timeout_s=3600)
+    stage.rotate(90)
+    stage.sleep(600)                   # use stage.sleep, not time.sleep
+    print(stage.readings())
+```
+
+`Stage(virtual_time=True)` (simulators only) runs on a virtual clock, so a long recipe finishes in
+seconds. See [examples/anneal_and_rotate.py](examples/anneal_and_rotate.py):
+
+```powershell
+python examples/anneal_and_rotate.py               # simulators, virtual time
+python examples/anneal_and_rotate.py --real-time   # wall clock (required with hardware)
+```
+
 ## Tests
 
 ```powershell

@@ -12,6 +12,12 @@ Every ``pid.period_ms`` :meth:`ThermalWorker.step` does::
   re-enabled; :meth:`acknowledge_alarm` clears the latch.
 * A failed temperature read keeps the last voltage command; if no fresh reading
   arrives for ``limits.stale_temp_s`` the STALE_TEMP trip switches the PSU off.
+* Autotune mode (:meth:`ThermalWorker.start_autotune`): a :class:`RelayAutotune`
+  replaces the PID output (still through ``clamp_voltage`` and the safety checks).
+  It ends on success, timeout, cancel, PSU off or a safety trip and emits
+  :attr:`autotune_finished`. Unless the PSU went off, PID control then resumes at
+  the autotune set point, its integrator preset to the relay bias (bumpless).
+  The gains are not changed automatically; apply them with :meth:`set_gains`.
 
 ``clock`` is the time base for the ramp, profile, PID dt and safety checks. For
 accelerated tests pass the simulator's clock and drive :meth:`step` directly.
@@ -19,6 +25,7 @@ accelerated tests pass the simulator's clock and drive :meth:`step` directly.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 import time
@@ -29,6 +36,7 @@ from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal, pyqtSlot
 
 from ..config import Config
 from ..drivers.base import PowerSupply, PsuReading, Thermometer
+from .autotune import AutotuneParams, AutotuneState, RelayAutotune
 from .pid import PID
 from .profile import ProfileRunner, TemperatureProfile
 from .ramp import SetpointRamp
@@ -53,6 +61,7 @@ class ThermalSample:
     alarms: tuple[Alarm, ...] = field(default_factory=tuple)
     profile_segment: int | None = None
     profile_phase: str | None = None
+    mode: str = "pid"  # "pid" or "autotune"
 
     @property
     def tripped(self) -> bool:
@@ -65,6 +74,8 @@ class ThermalWorker(QObject):
     error = pyqtSignal(str)  # device failure
     refused = pyqtSignal(str)  # command rejected
     profile_finished = pyqtSignal()
+    autotune_progress = pyqtSignal(object)  # AutotuneStatus, every period while autotune runs
+    autotune_finished = pyqtSignal(object)  # AutotuneStatus (state DONE with .result, or ABORTED)
 
     def __init__(
         self,
@@ -94,6 +105,7 @@ class ThermalWorker(QObject):
         self._temp_time: float | None = None
         self._have_reading = False
         self._runner: ProfileRunner | None = None
+        self._autotune: RelayAutotune | None = None
         self._active_alarms: set[AlarmCode] = set()
         self._errors: dict[str, str] = {}
 
@@ -125,6 +137,10 @@ class ThermalWorker(QObject):
     def profile_running(self) -> bool:
         return self._runner is not None
 
+    @property
+    def autotune_running(self) -> bool:
+        return self._autotune is not None
+
     def _report(self, key: str, exc: BaseException | None) -> None:
         """Emit ``error`` when a failure starts or its message changes; stay quiet while it repeats."""
         if exc is None:
@@ -137,6 +153,7 @@ class ThermalWorker(QObject):
             self.error.emit(msg)
 
     def _disable_psu(self) -> None:
+        self._end_autotune("PSU switched off", resume_pid=False)
         self._psu_enabled = False
         self._v_cmd = 0.0
         self.pid.reset()
@@ -164,6 +181,9 @@ class ThermalWorker(QObject):
             return
         if sp_c > self.safety.t_max_c:
             self.refused.emit(f"set target: {sp_c:g} °C is above the {self.safety.t_max_c:g} °C limit")
+            return
+        if self._autotune is not None:
+            self.refused.emit("set target: autotune is running; cancel it first")
             return
         if self._runner is not None:
             self._runner = None
@@ -211,6 +231,9 @@ class ThermalWorker(QObject):
         if not isinstance(profile, TemperatureProfile):
             self.refused.emit("start profile: not a TemperatureProfile")
             return
+        if self._autotune is not None:
+            self.refused.emit("start profile: autotune is running; cancel it first")
+            return
         too_hot = [s.ramp_to for s in profile.segments if s.ramp_to > self.safety.t_max_c]
         if too_hot:
             self.refused.emit(f"start profile: segment target {max(too_hot):g} °C is above the {self.safety.t_max_c:g} °C limit")
@@ -228,6 +251,62 @@ class ThermalWorker(QObject):
         sp = self._runner.status().program_sp
         self._runner = None
         self.ramp.reset(sp)
+
+    @pyqtSlot(object)
+    def start_autotune(self, params: AutotuneParams) -> None:
+        """Start a relay autotune around ``params.setpoint_c``. Needs the PSU on and a reading."""
+        if not isinstance(params, AutotuneParams):
+            self.refused.emit("autotune: not AutotuneParams")
+            return
+        if self._autotune is not None:
+            self.refused.emit("autotune: already running")
+            return
+        if not self._psu_enabled or self.safety.tripped:
+            self.refused.emit("autotune: switch the PSU on first (and acknowledge any trip)")
+            return
+        if self._runner is not None:
+            self.refused.emit("autotune: a profile is running; stop it first")
+            return
+        if self._temp is None:
+            self.refused.emit("autotune: no temperature reading yet")
+            return
+        if params.bias_v is None:
+            if self._v_cmd <= 0:
+                self.refused.emit("autotune: the present output is 0 V; enter a bias voltage")
+                return
+            params = dataclasses.replace(params, bias_v=round(self._v_cmd, 3))
+        try:
+            self._autotune = RelayAutotune(params, v_max=self.safety.v_max, t_max_c=self.safety.t_max_c)
+        except ValueError as exc:
+            self.refused.emit(f"autotune: {exc}")
+            return
+        at = self._autotune
+        log.info(
+            "thermal: autotune started at %.1f °C, relay %.2f/%.2f V, h=%.2f °C, %d cycles",
+            params.setpoint_c, at.v_low, at.v_high, params.hysteresis_c, params.cycles,
+        )  # fmt: skip
+
+    @pyqtSlot()
+    def cancel_autotune(self) -> None:
+        self._end_autotune("cancelled by user")
+
+    def _end_autotune(self, reason: str | None, *, resume_pid: bool = True) -> None:
+        """Finish the running autotune (abort with ``reason`` if it is still running)."""
+        at = self._autotune
+        if at is None:
+            return
+        if reason is not None:
+            at.abort(reason)
+        self._autotune = None
+        st = at.status()
+        if st.state is AutotuneState.DONE:
+            log.info("thermal: autotune done: %s", st.message)
+        else:
+            log.warning("thermal: autotune aborted: %s", st.message)
+        if resume_pid:
+            self.ramp.reset(at.params.setpoint_c)
+            self.pid.reset(integral=at.params.bias_v)  # bumpless hand-back to the PID
+        self.autotune_finished.emit(st)
 
     @pyqtSlot()
     def acknowledge_alarm(self) -> None:
@@ -270,6 +349,9 @@ class ThermalWorker(QObject):
                 self.ramp.reset(program_sp)
                 log.info("thermal: profile finished")
                 self.profile_finished.emit()
+        elif self._autotune is not None:
+            program_sp = target_sp = self._autotune.params.setpoint_c
+            ramping = False
         else:
             program_sp = self.ramp.program_sp(now)
             target_sp = self.ramp.target
@@ -278,7 +360,23 @@ class ThermalWorker(QObject):
         # 3. PID -> clamp -> PSU
         dt = self.period_ms / 1000.0 if self._last_step is None else now - self._last_step
         self._last_step = now
-        if self._psu_enabled and not self.safety.tripped:
+        mode = "pid"
+        if self._autotune is not None and self._psu_enabled and not self.safety.tripped:
+            at = self._autotune
+            v = self.safety.clamp_voltage(at.update(now, temp))
+            if at.state.finished:
+                self._end_autotune(None)  # done, timeout or deviation abort: the PID takes over below
+                program_sp = target_sp = self.ramp.program_sp(now)
+            else:
+                mode = "autotune"
+                try:
+                    self.psu.set_voltage(v)
+                    self._v_cmd = v
+                    self._report("set voltage", None)
+                except Exception as exc:  # noqa: BLE001
+                    self._report("set voltage", exc)
+                self.autotune_progress.emit(at.status())
+        if mode == "pid" and self._psu_enabled and not self.safety.tripped:
             if temp is not None and math.isfinite(temp) and dt > 0:
                 v = self.safety.clamp_voltage(self.pid.update(program_sp, temp, dt))
                 try:
@@ -313,6 +411,10 @@ class ThermalWorker(QObject):
             )
         )
         if self.safety.tripped and (self._psu_enabled or psu_on):
+            if self._autotune is not None:
+                trip = "; ".join(a.message for a in alarms if a.is_trip)
+                self._end_autotune(f"safety trip: {trip}", resume_pid=False)
+                mode = "pid"
             self.safety.enforce(self.psu)
             self._psu_enabled = False
             self._v_cmd = 0.0
@@ -341,6 +443,7 @@ class ThermalWorker(QObject):
             alarms=tuple(alarms),
             profile_segment=profile_segment,
             profile_phase=profile_phase,
+            mode=mode,
         )
         self.sample.emit(s)
         return s

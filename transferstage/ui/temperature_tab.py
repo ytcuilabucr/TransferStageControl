@@ -20,8 +20,11 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QLabel,
     QMessageBox,
+    QProgressBar,
     QPushButton,
+    QSpinBox,
     QSplitter,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -30,6 +33,7 @@ from PyQt5.QtWidgets import (
 
 from ..app import AppController
 from ..config import HARD_T_MAX_C
+from ..control.autotune import RECOMMENDED_RULE, RULES, AutotuneParams, AutotuneState, AutotuneStatus
 from ..control.profile import ProfileError, Segment, TemperatureProfile
 from ..control.thermal import ThermalSample
 from .widgets import AMBER, GREEN, RED, Led, fmt, spin
@@ -64,7 +68,10 @@ class TemperatureTab(QWidget):
         lv.addWidget(self._build_setpoint_group())
         lv.addWidget(self._build_readouts_group())
         lv.addWidget(self._build_pid_group())
-        lv.addWidget(self._build_profile_group(), 1)
+        self.side_tabs = QTabWidget()
+        self.side_tabs.addTab(self._build_profile_group(), "Profile")
+        self.side_tabs.addTab(self._build_autotune_group(), "Autotune")
+        lv.addWidget(self.side_tabs, 1)
         split.addWidget(left)
         split.addWidget(self._build_charts())
         split.setStretchFactor(0, 0)
@@ -188,6 +195,70 @@ class TemperatureTab(QWidget):
         v.addWidget(self.profile_status)
         return g
 
+    def _build_autotune_group(self) -> QWidget:
+        g = QWidget()
+        v = QVBoxLayout(g)
+        form = QFormLayout()
+        self.at_sp = spin(0, self.t_max - 1, 100.0, decimals=1, step=1, suffix=" °C")
+        self.at_bias = spin(0, 24, 0.0, decimals=2, step=0.5, suffix=" V")
+        self.at_bias.setSpecialValueText("Present output")
+        self.at_bias.setToolTip("Relay centre voltage; 0 = the present PSU output (hold the set point first)")
+        self.at_amp = spin(0.1, 24, 3.0, decimals=2, step=0.5, suffix=" V")
+        self.at_amp.setToolTip("Relay swings bias ± amplitude, clamped to 0 V and the voltage limit")
+        self.at_hyst = spin(0, 10, 0.3, decimals=2, step=0.1, suffix=" °C")
+        self.at_hyst.setToolTip("Hysteresis band; set a little above the temperature noise")
+        self.at_cycles = QSpinBox()
+        self.at_cycles.setRange(1, 20)
+        self.at_cycles.setValue(3)
+        self.at_timeout = spin(1, 600, 60, decimals=0, step=5, suffix=" min")
+        self.at_maxdev = spin(1, 100, 30, decimals=1, step=1, suffix=" °C")
+        self.at_maxdev.setToolTip("Abort if the temperature rises more than this above the set point")
+        for label, w in (
+            ("Set point", self.at_sp),
+            ("Bias", self.at_bias),
+            ("Amplitude", self.at_amp),
+            ("Hysteresis", self.at_hyst),
+            ("Cycles", self.at_cycles),
+            ("Timeout", self.at_timeout),
+            ("Max rise above SP", self.at_maxdev),
+        ):
+            form.addRow(label + ":", w)
+        v.addLayout(form)
+        h = QHBoxLayout()
+        self.at_start_btn = QPushButton("Autotune")
+        self.at_start_btn.clicked.connect(self.start_autotune)
+        self.at_cancel_btn = QPushButton("Cancel")
+        self.at_cancel_btn.setEnabled(False)
+        self.at_cancel_btn.clicked.connect(self.c.cancel_autotune.emit)
+        h.addWidget(self.at_start_btn)
+        h.addWidget(self.at_cancel_btn)
+        v.addLayout(h)
+        self.at_progress = QProgressBar()
+        self.at_progress.setRange(0, 100)
+        self.at_progress.setValue(0)
+        v.addWidget(self.at_progress)
+        self.at_status = QLabel("Autotune: idle")
+        self.at_status.setWordWrap(True)
+        v.addWidget(self.at_status)
+        self.at_table = QTableWidget(len(RULES), 3)
+        self.at_table.setHorizontalHeaderLabels(["Kc (V/°C)", "Ti (min)", "Td (min)"])
+        self.at_table.setVerticalHeaderLabels(list(RULES))
+        self.at_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.at_table.verticalHeader().setDefaultSectionSize(22)
+        self.at_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.at_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.at_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.at_table.setMinimumHeight(len(RULES) * 22 + 30)
+        v.addWidget(self.at_table)
+        self.at_apply_btn = QPushButton("Apply gains")
+        self.at_apply_btn.setToolTip("Copy the selected row into the PID gains and apply them")
+        self.at_apply_btn.setEnabled(False)
+        self.at_apply_btn.clicked.connect(self.apply_autotune_gains)
+        v.addWidget(self.at_apply_btn)
+        v.addStretch(1)
+        self._at_result = None
+        return g
+
     def _build_charts(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
@@ -242,6 +313,79 @@ class TemperatureTab(QWidget):
         self.psu_btn.setChecked(on)
         self.psu_btn.blockSignals(False)
         self.psu_btn.setText("PSU On" if on else "PSU Off")
+
+    # ------------------------------------------------------------------ autotune
+
+    def autotune_params(self) -> AutotuneParams:
+        bias = self.at_bias.value()
+        return AutotuneParams(
+            setpoint_c=float(self.at_sp.value()),
+            bias_v=None if bias == 0 else float(bias),
+            amplitude_v=float(self.at_amp.value()),
+            hysteresis_c=float(self.at_hyst.value()),
+            cycles=int(self.at_cycles.value()),
+            timeout_s=float(self.at_timeout.value()) * 60.0,
+            max_deviation_c=float(self.at_maxdev.value()),
+        )
+
+    def start_autotune(self) -> None:
+        params = self.autotune_params()
+        try:
+            params.validate(self.t_max)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Autotune", str(exc))
+            return
+        self._at_result = None
+        self.at_apply_btn.setEnabled(False)
+        self.at_table.clearContents()
+        self.at_progress.setValue(0)
+        self.at_status.setText("Autotune: starting…")
+        self.c.start_autotune.emit(params)
+
+    def on_autotune_progress(self, st: AutotuneStatus) -> None:
+        self.at_start_btn.setEnabled(False)
+        self.at_cancel_btn.setEnabled(True)
+        self.at_progress.setValue(int(round(st.fraction * 100)))
+        what = "approaching set point" if st.state is AutotuneState.APPROACH else "relay oscillation"
+        self.at_status.setText(
+            f"Autotune: {what}, cycle {st.cycles_done}/{st.cycles_total}, "
+            f"{st.elapsed_s / 60:.1f} min, output {st.output_v:.2f} V"
+        )
+
+    def on_autotune_finished(self, st: AutotuneStatus) -> None:
+        self.at_start_btn.setEnabled(True)
+        self.at_cancel_btn.setEnabled(False)
+        if st.state is not AutotuneState.DONE or st.result is None:
+            self.at_status.setText(f"Autotune aborted: {st.message}")
+            self.message.emit(f"Autotune aborted: {st.message}")
+            return
+        r = st.result
+        self._at_result = r
+        self.at_progress.setValue(100)
+        for row, name in enumerate(RULES):
+            g = r.gains[name]
+            for col, val in enumerate((g.kc, g.ti_min, g.td_min)):
+                self.at_table.setItem(row, col, QTableWidgetItem(f"{val:.4g}"))
+        self.at_table.selectRow(RULES.index(RECOMMENDED_RULE))
+        self.at_apply_btn.setEnabled(True)
+        self.at_status.setText(
+            f"Autotune done: Ku = {r.ku:.4g} V/°C, Pu = {r.pu_s:.1f} s, a = {r.amplitude_c:.2f} °C "
+            f"(period spread {r.period_spread:.0%}). The PID now holds the set point with the old gains."
+        )
+        self.message.emit(f"Autotune done: Ku = {r.ku:.4g} V/°C, Pu = {r.pu_s:.1f} s")
+
+    def apply_autotune_gains(self) -> None:
+        if self._at_result is None:
+            return
+        rows = self.at_table.selectionModel().selectedRows()
+        row = rows[0].row() if rows else RULES.index(RECOMMENDED_RULE)
+        name = RULES[row]
+        g = self._at_result.gains[name]
+        self.kc_spin.setValue(g.kc)
+        self.ti_spin.setValue(g.ti_min)
+        self.td_spin.setValue(g.td_min)
+        self.c.set_gains.emit(g.kc, g.ti_min, g.td_min)
+        self.message.emit(f"PID gains ({name}): Kc {g.kc:.4g}, Ti {g.ti_min:.4g} min, Td {g.td_min:.4g} min")
 
     # ------------------------------------------------------------------ profile editor
 

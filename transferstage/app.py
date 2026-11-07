@@ -51,6 +51,8 @@ class AppController(QObject):
     start_profile = pyqtSignal(object)
     stop_profile = pyqtSignal()
     acknowledge_alarm = pyqtSignal()
+    start_autotune = pyqtSignal(object)  # AutotuneParams
+    cancel_autotune = pyqtSignal()
 
     def __init__(
         self,
@@ -95,6 +97,8 @@ class AppController(QObject):
             (self.start_profile, t.start_profile),
             (self.stop_profile, t.stop_profile),
             (self.acknowledge_alarm, t.acknowledge_alarm),
+            (self.start_autotune, t.start_autotune),
+            (self.cancel_autotune, t.cancel_autotune),
         ):
             sig.connect(slot)
         if self.datalog is not None:
