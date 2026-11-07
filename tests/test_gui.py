@@ -11,7 +11,7 @@ from transferstage.drivers.base import MotorState
 from transferstage.ui.input_map import parse_shortcut
 from transferstage.ui.main_window import MainWindow
 
-CA = Qt.ControlModifier | Qt.AltModifier
+CA = Qt.ControlModifier
 
 
 @pytest.fixture
@@ -70,15 +70,15 @@ def test_jog_key_press_release_moves_and_stops(gui, qtbot):
     window, controller, statuses = gui
     z = controller.devices.z
     start = z.position_um
-    _key(window, QEvent.KeyPress, Qt.Key_PageUp)
+    _key(window, QEvent.KeyPress, Qt.Key_F2)
     qtbot.waitUntil(lambda: z.position_um > start + 20, timeout=3000)
     # auto-repeat press/release pairs while the key is held must not stop the jog
-    _key(window, QEvent.KeyRelease, Qt.Key_PageUp, autorep=True)
-    _key(window, QEvent.KeyPress, Qt.Key_PageUp, autorep=True)
+    _key(window, QEvent.KeyRelease, Qt.Key_F2, autorep=True)
+    _key(window, QEvent.KeyPress, Qt.Key_F2, autorep=True)
     qtbot.wait(200)
     assert z.state is MotorState.MOVING
     # real release (modifiers may already be up) stops it
-    _key(window, QEvent.KeyRelease, Qt.Key_PageUp, mods=Qt.NoModifier)
+    _key(window, QEvent.KeyRelease, Qt.Key_F2, mods=Qt.NoModifier)
     qtbot.waitUntil(lambda: z.state is MotorState.IDLE, timeout=3000)
     stopped = z.position_um
     qtbot.wait(300)
@@ -89,19 +89,19 @@ def test_jog_key_press_release_moves_and_stops(gui, qtbot):
 def test_safe_lock_blocks_jog(gui, qtbot):
     window, controller, _ = gui
     z = controller.devices.z
-    _key(window, QEvent.KeyPress, Qt.Key_L)
-    _key(window, QEvent.KeyRelease, Qt.Key_L)
+    _key(window, QEvent.KeyPress, Qt.Key_F1)
+    _key(window, QEvent.KeyRelease, Qt.Key_F1)
     assert window.manual.safe_lock_btn.isChecked()
     assert not window.manual.up_btn.isEnabled()
     start = z.position_um
-    _key(window, QEvent.KeyPress, Qt.Key_PageUp)
+    _key(window, QEvent.KeyPress, Qt.Key_F2)
     qtbot.wait(500)
-    _key(window, QEvent.KeyRelease, Qt.Key_PageUp)
+    _key(window, QEvent.KeyRelease, Qt.Key_F2)
     assert z.position_um == pytest.approx(start)
     assert z.state is MotorState.IDLE
 
     # unlock -> jog works again
-    _key(window, QEvent.KeyPress, Qt.Key_L)
+    _key(window, QEvent.KeyPress, Qt.Key_F1)
     assert not window.manual.safe_lock_btn.isChecked()
     window.manual.up_btn.pressed.emit()
     qtbot.waitUntil(lambda: z.position_um > start + 20, timeout=3000)
@@ -113,7 +113,7 @@ def test_speed_keys_change_speed(gui, qtbot):
     window, controller, _ = gui
     z = controller.devices.z
     before = window.manual.speed_spin.value()
-    _key(window, QEvent.KeyPress, Qt.Key_Up)
+    _key(window, QEvent.KeyPress, Qt.Key_F4)
     assert window.manual.speed_spin.value() > before
     target = window.manual.speed_spin.value()
     qtbot.waitUntil(lambda: z.velocity_um_s == pytest.approx(target), timeout=3000)
@@ -127,12 +127,12 @@ def test_presets_and_settings_save(gui, qtbot, tmp_path):
 
     st = window.settings
     assert st.t_max.maximum() == 300.0 and st.v_max.maximum() == 24.0
-    st.key_edits["cancel_motion"].setKeySequence(parse_shortcut("Ctrl+Alt+X"))
+    st.key_edits["cancel_motion"].setKeySequence(parse_shortcut("Ctrl+F9"))
     assert st.save()
     on_disk = load_config(tmp_path / "config.yaml")
-    assert on_disk.keys["cancel_motion"] == "Ctrl+Alt+X"
+    assert on_disk.keys["cancel_motion"] == "Ctrl+F9"
     assert on_disk.presets  # presets survive a settings save
-    assert window.input_map._combos[parse_shortcut("Ctrl+Alt+X")] == "cancel_motion"
+    assert window.input_map._combos[parse_shortcut("Ctrl+F9")] == "cancel_motion"
 
 
 def test_close_runs_safe_shutdown(gui, qtbot):

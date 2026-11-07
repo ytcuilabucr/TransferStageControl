@@ -129,12 +129,12 @@ class LimitsConfig:
 def _default_keys() -> dict[str, str]:
     # Match these to the TourBox Console mapping.
     return {
-        "safe_lock": "Ctrl+Alt+L",
-        "cancel_motion": "Ctrl+Alt+C",
-        "speed_up": "Ctrl+Alt+Up",
-        "speed_down": "Ctrl+Alt+Down",
-        "jog_up": "Ctrl+Alt+PgUp",
-        "jog_down": "Ctrl+Alt+PgDown",
+        "safe_lock": "Ctrl+F1",
+        "cancel_motion": "Ctrl+F6",
+        "speed_up": "Ctrl+F4",
+        "speed_down": "Ctrl+F5",
+        "jog_up": "Ctrl+F2",
+        "jog_down": "Ctrl+F3",
     }
 
 

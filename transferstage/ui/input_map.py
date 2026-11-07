@@ -1,20 +1,22 @@
 """Application-wide keyboard shortcuts (the TourBox is configured to send keystrokes).
 
-Actions and default keys (``keys:`` in config.yaml; set the TourBox Console to send these):
+Actions and default keys (``keys:`` in config.yaml; they match the TourBox Console preset):
 
 ==============  ===================  =======================================================
 action          TourBox control      default key
 ==============  ===================  =======================================================
-safe_lock       Side + Top           Ctrl+Alt+L      toggle Safe Lock
-cancel_motion   Top                  Ctrl+Alt+C      stop Z and rotator immediately
-speed_up        Knob clockwise       Ctrl+Alt+Up     +5 % of max speed, applied at once
-speed_down      Knob counter-cw      Ctrl+Alt+Down   −5 % of max speed, applied at once
-jog_up          Tall (hold)          Ctrl+Alt+PgUp   jog Z up while held
-jog_down        Short (hold)         Ctrl+Alt+PgDown jog Z down while held
+safe_lock       Side (+ Top)         Ctrl+F1         toggle Safe Lock
+cancel_motion   Top                  Ctrl+F6         stop Z and rotator immediately
+speed_up        Knob clockwise       Ctrl+F4         +5 % of max speed, applied at once
+speed_down      Knob counter-cw      Ctrl+F5         −5 % of max speed, applied at once
+jog_up          Tall (hold)          Ctrl+F2         jog Z up while held
+jog_down        Short (hold)         Ctrl+F3         jog Z down while held
 ==============  ===================  =======================================================
 
-The Ctrl+Alt modifier keeps the bindings from colliding with typing in number
-fields (plain PgUp/PgDown would also step a focused spin box).
+These defaults match the "TransferStageControl" preset in TourBox Console
+(the keys the LabVIEW program used). Ctrl+F keys do not collide with typing in
+number fields. Knob direction (Ctrl+F4 vs Ctrl+F5) is inferred from the preset
+layout; swap speed_up/speed_down if it turns out reversed.
 
 Implementation: an event filter on the QApplication sees every key event while
 any window of the app is active. A jog starts on the key press and stops on the

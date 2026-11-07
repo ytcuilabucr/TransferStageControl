@@ -78,20 +78,21 @@ the PSU off and closes the instruments; you are asked to confirm if the PSU is o
 
 ### TourBox shortcuts
 
-Set the TourBox Console to send these keystrokes (change them in Settings → Key bindings):
+The defaults match the existing **TransferStageControl** preset in TourBox Console, so no
+TourBox changes are needed (change the app side in Settings → Key bindings if needed):
 
 | Action | TourBox control | Default key |
 |---|---|---|
-| Safe Lock (toggle) | Side + Top | `Ctrl+Alt+L` |
-| Cancel Motion | Top | `Ctrl+Alt+C` |
-| Speed up (+5 % of max, applied at once) | Knob clockwise | `Ctrl+Alt+Up` |
-| Speed down | Knob counter-clockwise | `Ctrl+Alt+Down` |
-| Jog Z up while held | Tall | `Ctrl+Alt+PgUp` |
-| Jog Z down while held | Short | `Ctrl+Alt+PgDown` |
+| Safe Lock (toggle) | Side, or Side + Top | `Ctrl+F1` |
+| Cancel Motion | Top | `Ctrl+F6` |
+| Speed up (+5 % of max, applied at once) | Knob clockwise | `Ctrl+F4` |
+| Speed down | Knob counter-clockwise | `Ctrl+F5` |
+| Jog Z up while held | Tall | `Ctrl+F2` |
+| Jog Z down while held | Short | `Ctrl+F3` |
 
 The shortcuts work whenever an app window is focused. Jogs start on key press and stop on key
-release; auto-repeat is ignored, and a jog stops if the app loses focus. The Ctrl+Alt modifier
-keeps them from clashing with typing in number fields.
+release; auto-repeat is ignored, and a jog stops if the app loses focus. If the knob turns the speed the wrong way, swap the
+`speed_up` / `speed_down` keys.
 
 ## Tests
 
