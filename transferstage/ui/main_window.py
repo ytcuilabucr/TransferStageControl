@@ -15,6 +15,7 @@ import logging
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QCloseEvent, QColor, QIcon, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -267,6 +268,10 @@ class MainWindow(QMainWindow):
                 return
         self._conn_timer.stop()
         self.input_map.uninstall()
+        # Shutdown blocks for a few seconds (Kinesis Disconnect ~0.6 s per stage, then the Kinesis
+        # USB manager takes ~2 s to unload at process exit). Hide first so the click feels instant.
+        self.hide()
+        QApplication.processEvents()
         self.c.shutdown()
         self.log_tab.detach()
         ev.accept()
