@@ -17,7 +17,7 @@ class FakeSerial:
     """Scripted 1685B: replies to each command per ``responses`` (default: just OK)."""
 
     def __init__(self, responses=None):
-        self.responses = {"GMAX": ["600050", "OK"], **(responses or {})}
+        self.responses = {"GMAX": ["605680", "OK"], **(responses or {})}
         self.written: list[str] = []
         self._buf = b""
         self.closed = False
@@ -54,13 +54,13 @@ def make(responses=None, **kw):
 
 
 @pytest.mark.parametrize(
-    "v, cmd", [(0, "VOLT000"), (1.0, "VOLT010"), (5, "VOLT050"), (12.34, "VOLT123"), (12.36, "VOLT124"), (60, "VOLT600")]
+    "v, cmd", [(0, "VOLT010"), (0.5, "VOLT010"), (1.0, "VOLT010"), (5, "VOLT050"), (12.34, "VOLT123"), (12.36, "VOLT124"), (60, "VOLT600")]
 )
 def test_format_voltage(v, cmd):
     assert format_voltage(v) == cmd
 
 
-@pytest.mark.parametrize("a, cmd", [(0, "CURR000"), (0.5, "CURR005"), (1.5, "CURR015"), (5, "CURR050")])
+@pytest.mark.parametrize("a, cmd", [(0, "CURR000"), (0.5, "CURR050"), (1.5, "CURR150"), (3, "CURR300"), (1.234, "CURR123"), (5, "CURR500")])
 def test_format_current(a, cmd):
     assert format_current(a) == cmd
 
@@ -74,7 +74,9 @@ def test_format_voltage_rejects_out_of_range(bad):
 def test_format_current_respects_gmax():
     with pytest.raises(ValueError):
         format_current(5.1)
-    assert format_current(10, i_max=10) == "CURR100"
+    assert format_current(6.8, i_max=6.8) == "CURR680"
+    with pytest.raises(ValueError):
+        format_current(10, i_max=10)  # 1000 does not fit in 3 digits
 
 
 def test_output_polarity_is_inverted():
@@ -97,8 +99,9 @@ def test_parse_getd_rejects_garbage(bad):
 
 
 def test_parse_gets_and_gmax():
-    assert parse_gets("050015") == (5.0, 1.5)
-    assert parse_gmax("600050") == (60.0, 5.0)
+    assert parse_gets("050150") == (5.0, 1.5)
+    assert parse_gets("010030") == (1.0, 0.3)  # what the supply reported with the old x10 bug
+    assert parse_gmax("605680") == (60.5, 6.8)  # the real 1685B
     with pytest.raises(DeviceError):
         parse_gets("50015")
 
@@ -107,20 +110,20 @@ def test_parse_gets_and_gmax():
 
 
 def test_connect_reads_gmax_and_forces_output_off():
-    psu, fake = make({"GMAX": ["360100", "OK"]})
+    psu, fake = make({"GMAX": ["605680", "OK"]})
     psu.connect()
     assert fake.written == ["GMAX", "SOUT1"]
-    assert (psu.v_max, psu.i_max) == (36.0, 10.0)
+    assert (psu.v_max, psu.i_max) == (60.5, 6.8)
     assert psu.is_connected and not psu.is_on
 
 
 def test_commands_and_readback():
-    psu, fake = make({"GETD": ["050001230", "OK"], "GETS": ["050015", "OK"]})
+    psu, fake = make({"GETD": ["050001230", "OK"], "GETS": ["050150", "OK"]})
     psu.connect()
     psu.set_current(1.5)
     psu.set_voltage(5)
     psu.output(True)
-    assert fake.written[-3:] == ["CURR015", "VOLT050", "SOUT0"]
+    assert fake.written[-3:] == ["CURR150", "VOLT050", "SOUT0"]
     assert psu.is_on
     assert psu.read_setpoints() == (5.0, 1.5)
     r = psu.read_output()

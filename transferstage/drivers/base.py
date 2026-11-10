@@ -187,6 +187,9 @@ class PowerSupply(Device):
     instrument's own range.
     """
 
+    #: Lowest voltage the supply can be programmed to; lower set points are sent as this.
+    v_min: float = 0.0
+
     @abstractmethod
     def set_voltage(self, v: float) -> None: ...
 

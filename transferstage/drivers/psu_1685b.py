@@ -18,19 +18,21 @@ command, and a query sends its data line first, then ``OK\\r``):
 
 ==============  =============================================================
 ``VOLTvvv``     voltage set point, 3 digits, volts x10   (``VOLT050`` = 5.0 V)
-``CURRiii``     current limit, 3 digits, amps x10       (``CURR015`` = 1.5 A)
+``CURRiii``     current limit, 3 digits, amps x100      (``CURR150`` = 1.50 A)
 ``SOUT0``       output **ON**  (inverted polarity: 0 = on)
 ``SOUT1``       output **OFF**
-``GETS``        set points -> ``vvviii`` (both x10)
+``GETS``        set points -> ``vvviii`` (V x10, A x100)
 ``GETD``        display readings -> ``vvvviiiis`` (V and A x100, s: 0 = CV, 1 = CC)
-``GMAX``        maximum ratings -> ``vvviii`` (both x10)
+``GMAX``        maximum ratings -> ``vvviii`` (V x10, A x100)
 ==============  =============================================================
 
 Serial settings: 9600 baud, 8 data bits, no parity, 1 stop bit, no flow control.
 
-Note: PROMPTS.md expected amps x100 for ``CURR``. Both sources above say x10, so the
-1685B current limit has 0.1 A resolution. The ``--read`` CLI prints the raw replies
-so this can be confirmed on the instrument.
+Current is amps x100 on this 1685B, as PROMPTS.md (from the LabVIEW program) said;
+the secondary sources above say x10, which is wrong for this unit. Confirmed on the
+instrument on 2026-11-09: with ``CURR030`` (read as 3.0 A under x10) the supply went
+constant-current at 0.31 A, and ``GMAX`` answers ``605680`` (60.5 V / 6.80 A; x10
+would mean 68 A). The ``--read`` CLI prints the raw replies.
 
 The supply has no output-state query, so :attr:`Psu1685B.is_on` is the last
 commanded state. By default :meth:`Psu1685B.connect` turns the output off so that
@@ -62,12 +64,15 @@ ACK = "OK"
 BAUD = 9600
 
 V_SCALE = 10  # VOLT / GETS / GMAX voltage digits per volt
-I_SCALE = 10  # CURR / GETS / GMAX current digits per amp
+I_SCALE = 100  # CURR / GETS / GMAX current digits per amp
 DISPLAY_SCALE = 100  # GETD digits per volt / amp
 
 # 1685B ratings, used until GMAX is read on connect.
 DEFAULT_V_MAX = 60.0
 DEFAULT_I_MAX = 5.0
+# Lowest programmable voltage. The supply never answers a VOLT below 1.0 V (VOLT000 times out,
+# confirmed on the instrument), so lower set points are sent as 1.0 V; use the output switch for 0 V.
+V_MIN = 1.0
 
 
 # --------------------------------------------------------------------------- protocol helpers (pure)
@@ -86,12 +91,13 @@ def _setpoint_digits(value: float, scale: int, maximum: float, what: str) -> int
 
 
 def format_voltage(v: float, v_max: float = DEFAULT_V_MAX) -> str:
-    """``5.0`` -> ``"VOLT050"`` (rounded to the 0.1 V resolution)."""
-    return f"VOLT{_setpoint_digits(v, V_SCALE, v_max, 'voltage'):03d}"
+    """``5.0`` -> ``"VOLT050"`` (rounded to the 0.1 V resolution; 0 <= v < 1 V -> ``"VOLT010"``)."""
+    digits = _setpoint_digits(v, V_SCALE, v_max, "voltage")
+    return f"VOLT{max(digits, round(V_MIN * V_SCALE)):03d}"
 
 
 def format_current(a: float, i_max: float = DEFAULT_I_MAX) -> str:
-    """``1.5`` -> ``"CURR015"`` (rounded to the 0.1 A resolution)."""
+    """``1.5`` -> ``"CURR150"`` (rounded to the 0.01 A resolution)."""
     return f"CURR{_setpoint_digits(a, I_SCALE, i_max, 'current'):03d}"
 
 
@@ -122,13 +128,13 @@ def parse_getd(reply: str) -> tuple[float, float, PsuMode]:
 
 
 def parse_gets(reply: str) -> tuple[float, float]:
-    """``"050015"`` -> ``(5.0, 1.5)``: set points ``vvv iii``, both x10."""
+    """``"050150"`` -> ``(5.0, 1.5)``: set points ``vvv iii``, V x10 and A x100."""
     s = _digits(reply, 6, "GETS")
     return int(s[0:3]) / V_SCALE, int(s[3:6]) / I_SCALE
 
 
 def parse_gmax(reply: str) -> tuple[float, float]:
-    """``"600050"`` -> ``(60.0, 5.0)``: maximum ratings ``vvv iii``, both x10."""
+    """``"605680"`` -> ``(60.5, 6.8)``: maximum ratings ``vvv iii``, V x10 and A x100."""
     s = _digits(reply, 6, "GMAX")
     return int(s[0:3]) / V_SCALE, int(s[3:6]) / I_SCALE
 
@@ -155,11 +161,15 @@ def _open_serial(port: str, timeout_s: float) -> Any:
 class Psu1685B(PowerSupply):
     """B&K 1685B on a serial port.
 
+    Set points below :data:`V_MIN` are sent as ``V_MIN`` (see :func:`format_voltage`).
+
     ``serial_factory(port, timeout_s)`` returns an open pyserial-like object
     (``write``, ``read_until``, ``reset_input_buffer``, ``close``); tests pass a fake.
     ``off_on_connect`` / ``off_on_close`` send ``SOUT1`` at those points (default on:
     the heater must never be left energised by accident).
     """
+
+    v_min = V_MIN
 
     def __init__(
         self,
