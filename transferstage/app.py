@@ -43,6 +43,7 @@ class AppController(QObject):
     home_z = pyqtSignal()
     home_rotator = pyqtSignal()
     set_safe_lock = pyqtSignal(bool)
+    check_connection = pyqtSignal()  # test both stages, reconnect the ones that dropped
     # thermal commands -> ThermalWorker slots
     set_target = pyqtSignal(float, float)
     set_psu_enabled = pyqtSignal(bool)
@@ -78,6 +79,7 @@ class AppController(QObject):
         self._shut_down = False
         self.last_thermal = None  # latest ThermalSample (GUI thread)
         self.thermal.sample.connect(self._on_thermal)
+        self.motion.connection.connect(self._on_connection_checked)
 
         m, t = self.motion, self.thermal
         for sig, slot in (
@@ -90,6 +92,7 @@ class AppController(QObject):
             (self.home_z, m.home_z),
             (self.home_rotator, m.home_rotator),
             (self.set_safe_lock, m.set_safe_lock),
+            (self.check_connection, m.check_connection),
             (self.set_target, t.set_target),
             (self.set_psu_enabled, t.set_psu_enabled),
             (self.set_gains, t.set_gains),
@@ -122,6 +125,7 @@ class AppController(QObject):
         on(self.home_z, lambda: "home Z")
         on(self.home_rotator, lambda: "home rotator")
         on(self.set_safe_lock, lambda b: f"safe lock {'on' if b else 'off'}")
+        on(self.check_connection, lambda: "check stage connection")
         on(self.set_target, lambda t, r: f"set temperature {t:g} °C at {r:g} °C/min" if r > 0 else f"set temperature {t:g} °C (step)")
         on(self.set_psu_enabled, lambda b: f"PSU output {'on' if b else 'off'}")
         on(self.set_gains, lambda kc, ti, td: f"PID gains Kc={kc:g} Ti={ti:g} min Td={td:g} min")
@@ -139,6 +143,14 @@ class AppController(QObject):
             log.info("MARK: %s (no data log)", note)
             return None
         return self.datalog.mark(text)
+
+    def _on_connection_checked(self, results: dict) -> None:
+        """Keep ``connect_errors`` (status-bar tooltips) in step with the latest stage check."""
+        for name, (ok, detail) in results.items():
+            if ok:
+                self.connect_errors.pop(name, None)
+            else:
+                self.connect_errors[name] = RuntimeError(detail)
 
     def _on_thermal(self, sample) -> None:
         self.last_thermal = sample

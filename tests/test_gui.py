@@ -291,3 +291,33 @@ def test_close_runs_safe_shutdown(gui, qtbot):
     assert not controller.devices.psu.is_on
     assert not controller.devices.z.is_connected
     assert controller.datalog is not None and not controller.datalog.is_open
+
+
+def test_check_connection_reports_and_reconnects(gui, qtbot):
+    window, controller, _ = gui
+    m = window.manual
+    results = []
+    controller.motion.connection.connect(results.append)
+
+    m.check_conn_btn.click()
+    qtbot.waitUntil(lambda: len(results) == 1, timeout=3000)
+    assert results[0]["z"][0] and results[0]["rotator"][0]
+    assert m.check_conn_btn.isEnabled()
+    assert m.conn_details["z"].text().startswith("responding")
+
+    # Z stops answering and cannot be reconnected
+    controller.devices.z.fault = RuntimeError("USB unplugged")
+    m.check_conn_btn.click()
+    qtbot.waitUntil(lambda: len(results) == 2, timeout=3000)
+    assert results[1]["z"] == (False, "not connected: USB unplugged")
+    assert results[1]["rotator"][0]
+    assert "USB unplugged" in str(controller.connect_errors["z"])
+    assert not controller.device_connected("z")
+
+    # cable back in: the next check reconnects it
+    controller.devices.z.fault = None
+    m.check_conn_btn.click()
+    qtbot.waitUntil(lambda: len(results) == 3, timeout=3000)
+    assert results[2]["z"][0] and results[2]["z"][1].startswith("connected; responding")
+    assert controller.device_connected("z")
+    assert "z" not in controller.connect_errors

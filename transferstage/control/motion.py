@@ -61,6 +61,7 @@ class MotionWorker(QObject):
     status = pyqtSignal(object)  # MotionStatus
     error = pyqtSignal(str)  # device failure
     refused = pyqtSignal(str)  # command rejected (safe lock, soft limit, bad value)
+    connection = pyqtSignal(object)  # {"z"/"rotator": (ok, detail)} from check_connection
 
     def __init__(
         self,
@@ -229,6 +230,59 @@ class MotionWorker(QObject):
         self._safe_lock = bool(on)
         log.info("motion: safe lock %s", "on" if on else "off")
         self.poll()
+
+    # ------------------------------------------------------------------ connection check
+
+    @pyqtSlot()
+    def check_connection(self) -> None:
+        """Talk to both stages and reconnect any that is not connected, does not answer or reports an error.
+
+        Emits ``connection`` with ``{"z": (ok, detail), "rotator": (ok, detail)}``. Allowed under
+        safe lock: it never moves anything. A reconnect blocks this thread for a few seconds
+        (Kinesis Connect + settings load); polling resumes afterwards.
+        """
+        results = {
+            "z": self._check_axis("Z", self.z, lambda: f"{self.z.position_um / 1000.0:.4f} mm"),
+            "rotator": self._check_axis("rotator", self.rotator, lambda: f"{self.rotator.angle_deg:.2f}°"),
+        }
+        self.connection.emit(results)
+        self.poll()
+
+    def _check_axis(self, label: str, dev, where: Callable[[], str]) -> tuple[bool, str]:
+        def probe() -> tuple[bool, str]:
+            """Raise if the stage does not answer or reports an error (both get a reconnect)."""
+            state = dev.state
+            pos = where()  # raises if the device does not answer
+            if state is MotorState.ERROR:
+                raise RuntimeError(f"stage reports an error state (at {pos})")
+            if state is MotorState.DISCONNECTED:
+                raise RuntimeError("not connected")
+            return True, f"responding: {state.value}, {pos}"
+
+        if dev.is_connected:
+            try:
+                return probe()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("connection check: %s does not answer (%s), reconnecting", label, exc)
+                try:
+                    dev.close()
+                except Exception as close_exc:  # noqa: BLE001
+                    log.warning("connection check: closing %s failed: %s", label, close_exc)
+            action = "reconnected"
+        else:
+            action = "connected"
+        try:
+            dev.connect()
+        except Exception as exc:  # noqa: BLE001
+            log.error("connection check: %s: %s", label, exc)
+            return False, f"not connected: {exc}"
+        try:
+            _, detail = probe()
+        except Exception as exc:  # noqa: BLE001
+            log.error("connection check: %s %s, but %s", label, action, exc)
+            return False, f"{action}, but {exc}"
+        log.info("connection check: %s %s", label, action)
+        return True, f"{action}; {detail}"
 
     # ------------------------------------------------------------------ polling
 

@@ -6,12 +6,13 @@ to the main window as separate pieces:
 * ``z_panel``        – left column "Z-Controller": status, set/current speed, position slide
 * ``rotator_panel``  – left column "Sample Rotator": current angle, set angle
 * ``tourbox_page``   – centre tab "TourBox GUI": Safe Lock, Cancel, speed settings + knob, jog
-* ``kinesis_page``   – centre tab "Kinesis GUI": move to / homing / position presets
+* ``kinesis_page``   – centre tab "Kinesis GUI": connection check / move to / homing / position presets
 """
 
 from __future__ import annotations
 
 import logging
+import time
 
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -237,6 +238,38 @@ class ManualPanel(QObject):
         w = QWidget()
         v = QVBoxLayout(w)
 
+        dev = self.c.config.devices
+        cg = QGroupBox("Connection")
+        cgrid = QGridLayout(cg)
+        self.conn_leds: dict[str, Led] = {}
+        self.conn_details: dict[str, QLabel] = {}
+        for row, (name, title, serial, sim) in enumerate(
+            (
+                ("z", "Z stage", dev.z_serial, dev.simulate.z),
+                ("rotator", "Rotator", dev.rotator_serial, dev.simulate.rotator),
+            )
+        ):
+            led = Led(f"{title}  {'(simulated)' if sim else serial}", GREEN)
+            detail = QLabel("—")
+            detail.setWordWrap(True)
+            self.conn_leds[name] = led
+            self.conn_details[name] = detail
+            cgrid.addWidget(led, row, 0)
+            cgrid.addWidget(detail, row, 1)
+        self.check_conn_btn = QPushButton("Check connection")
+        self.check_conn_btn.setToolTip(
+            "Talk to both stages; reconnect any that is not connected or does not answer.\n"
+            "Close the Thorlabs Kinesis program first: only one program can own the stages."
+        )
+        self.check_conn_btn.clicked.connect(self.check_connection)
+        self.conn_checked_label = QLabel("")
+        cgrid.addWidget(self.check_conn_btn, 2, 0)
+        cgrid.addWidget(self.conn_checked_label, 2, 1)
+        cgrid.setColumnStretch(1, 1)
+        self.c.motion.connection.connect(self.on_connection_checked)
+        self._conn_checked = False
+        v.addWidget(cg)
+
         zg = QGroupBox(f"Z stage   (soft limits {self.z_min / 1000:g} – {self.z_max / 1000:g} mm)")
         zgrid = QGridLayout(zg)
         self.move_spin = spin(self.z_min, self.z_max, self.z_min, decimals=1, step=10, suffix=" µm")
@@ -354,6 +387,37 @@ class ManualPanel(QObject):
         if QMessageBox.question(self.kinesis_page, "Home rotator", "Home the rotator?") == QMessageBox.Yes:
             self.c.home_rotator.emit()
 
+    # ------------------------------------------------------------------ connection
+
+    def check_connection(self) -> None:
+        self.check_conn_btn.setEnabled(False)
+        self.check_conn_btn.setText("Checking…")
+        self.conn_checked_label.setText("talking to the stages (a reconnect takes a few seconds)…")
+        self.c.check_connection.emit()
+
+    def on_connection_checked(self, results: dict) -> None:
+        self._conn_checked = True
+        self.check_conn_btn.setEnabled(True)
+        self.check_conn_btn.setText("Check connection")
+        for name, (ok, detail) in results.items():
+            self.conn_leds[name].set_on(True, GREEN if ok else RED)
+            self.conn_details[name].setText(detail)
+        bad = [n for n, (ok, _) in results.items() if not ok]
+        self.conn_checked_label.setText(f"last checked {time.strftime('%H:%M:%S')}")
+        self.message.emit(
+            "Stage connection OK" if not bad else "Stage connection problem: " + ", ".join(bad)
+        )
+
+    def _update_connection_leds(self, st: MotionStatus) -> None:
+        for name, state in (("z", st.z_state), ("rotator", st.rotator_state)):
+            ok = state not in (MotorState.DISCONNECTED, MotorState.ERROR)
+            self.conn_leds[name].set_on(True, GREEN if ok else RED)
+            if not self._conn_checked:  # before the first check: show the start-up result
+                err = self.c.connect_errors.get(name)
+                self.conn_details[name].setText(
+                    f"not connected: {err}" if err else ("connected at start-up" if ok else state.value)
+                )
+
     # ------------------------------------------------------------------ presets
 
     def _load_presets(self) -> None:
@@ -414,6 +478,7 @@ class ManualPanel(QObject):
 
     def on_status(self, st: MotionStatus) -> None:
         self._last_status = st
+        self._update_connection_leds(st)
         if not self._speed_applied and st.z_state is not MotorState.DISCONNECTED:
             self._speed_applied = True
             self.apply_speed()  # knob position at start-up = the speed in use
