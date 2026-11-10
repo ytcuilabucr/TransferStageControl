@@ -1,7 +1,8 @@
 """RTD thermometer read through a digital multimeter over VISA.
 
 The LabVIEW VI ``Libs/DMM/GETtemperature.vi`` opens the VISA alias ``DMM`` and
-queries ``MEAS:TEMP? RTD`` (SCPI); the reply is one number in °C. The alias is
+queries ``MEAS:TEMP? RTD`` (SCPI); the reply is one number in °C. This driver
+sends ``CONF:TEMP RTD`` once and then polls ``READ?`` (see ``QUERY``). The alias is
 defined in NI MAX (or the VISA backend's alias table) and points at the meter.
 
 Manual test CLI::
@@ -23,7 +24,11 @@ from .base import DeviceError, NotConnectedError, Thermometer
 
 log = logging.getLogger(__name__)
 
-QUERY = "MEAS:TEMP? RTD"
+# The LabVIEW VI polls ``MEAS:TEMP? RTD``. MEAS? = CONF + READ?, so every poll
+# reconfigures the meter and its display blanks ("______") between readings.
+# Configure once instead, then poll with READ? (trigger + fetch only).
+CONFIGURE = "CONF:TEMP RTD"
+QUERY = "READ?"
 
 # SCPI meters report overload / open sensor as +/-9.9E37.
 OVERLOAD = 9.0e37
@@ -32,7 +37,7 @@ T_MIN_C, T_MAX_C = -250.0, 1000.0
 
 
 def parse_temperature(reply: str) -> float:
-    """Parse a ``MEAS:TEMP?`` reply such as ``"+2.345600E+01\\n"`` into °C."""
+    """Parse a ``READ?`` / ``MEAS:TEMP?`` reply such as ``"+2.345600E+01\\n"`` into °C."""
     text = reply.strip()
     if "," in text:  # some meters append units or a channel: take the first field
         text = text.split(",", 1)[0].strip()
@@ -45,6 +50,30 @@ def parse_temperature(reply: str) -> float:
     if not T_MIN_C <= value <= T_MAX_C:
         raise DeviceError(f"DMM: temperature {value} °C outside plausible RTD range")
     return value
+
+
+# VI_GPIB_REN_ADDRESS_GTL: send Go To Local to this device (pyvisa RENLineOperation.address_gtl).
+REN_ADDRESS_GTL = 6
+LOCAL_COMMAND = "SYST:LOC"
+
+
+def go_to_local(res: Any) -> None:
+    """Return the meter's front panel to local control. Never raises.
+
+    GPIB and USB-TMC take the bus-level Go To Local (``control_ren``). Interfaces
+    without REN (serial, LAN socket) raise there, so fall back to SCPI ``SYST:LOC``.
+    """
+    try:
+        res.control_ren(REN_ADDRESS_GTL)
+        log.debug("DMM: go to local (GTL)")
+        return
+    except Exception as exc:  # noqa: BLE001 - VisaIOError, NotImplementedError, AttributeError on fakes
+        log.debug("DMM: GTL not available (%s), trying %s", exc, LOCAL_COMMAND)
+    try:
+        res.write(LOCAL_COMMAND)
+        log.debug("DMM: go to local (%s)", LOCAL_COMMAND)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("DMM: could not return meter to local: %s", exc)
 
 
 class DmmThermometer(Thermometer):
@@ -67,6 +96,7 @@ class DmmThermometer(Thermometer):
         self._rm = resource_manager
         self._own_rm = resource_manager is None
         self._res: Any = None
+        self._configured = False
 
     def connect(self) -> None:
         with self._lock:
@@ -90,7 +120,9 @@ class DmmThermometer(Thermometer):
     def close(self) -> None:
         with self._lock:
             res, self._res = self._res, None
+            self._configured = False
             if res is not None:
+                go_to_local(res)
                 try:
                     res.close()
                 except Exception as exc:  # noqa: BLE001
@@ -112,8 +144,13 @@ class DmmThermometer(Thermometer):
             if self._res is None:
                 raise NotConnectedError(f"DMM {self.visa_alias!r} is not connected")
             try:
+                if not self._configured:
+                    self._res.write(CONFIGURE)
+                    self._configured = True
                 return self._res.query(QUERY)
             except Exception as exc:  # noqa: BLE001 - pyvisa.VisaIOError (timeout), OSError, ...
+                # The meter may have been reset or power-cycled: configure again next time.
+                self._configured = False
                 raise DeviceError(f"DMM: {QUERY} failed: {exc}") from exc
 
     def read_temperature(self) -> float:
