@@ -407,6 +407,7 @@ class ThermalWorker(QObject):
                 psu_command_v=self._v_cmd,
                 psu_output_on=psu_on,
                 psu_reading=reading,
+                psu_min_v=self.psu.v_min,
                 now=now,
             )
         )

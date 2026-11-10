@@ -87,6 +87,12 @@ def test_psu_deviation_is_warning():
     ok = PsuReading(12.1, 1.5, PsuMode.CV)
     assert mon.check(_sample(clock, psu_command_v=12, psu_output_on=True, psu_reading=ok)) == []
     bad = PsuReading(10.0, 1.2, PsuMode.CV)
+    # A short mismatch (the supply slewing after a step) is not reported...
+    assert mon.check(_sample(clock, psu_command_v=12, psu_output_on=True, psu_reading=bad)) == []
+    clock.t += 2.5
+    assert mon.check(_sample(clock, psu_command_v=12, psu_output_on=True, psu_reading=bad)) == []
+    # ...one that lasts deviation_hold_s is.
+    clock.t += 0.5
     alarms = mon.check(_sample(clock, psu_command_v=12, psu_output_on=True, psu_reading=bad))
     assert codes(alarms) == {AlarmCode.PSU_DEVIATION}
     assert alarms[0].severity is Severity.WARNING and not mon.tripped
@@ -98,6 +104,30 @@ def test_psu_deviation_is_warning():
     # Current-limited: lower voltage is expected, no warning.
     cc = PsuReading(8.0, 1.0, PsuMode.CC)
     assert mon.check(_sample(clock, psu_command_v=12, psu_output_on=True, psu_reading=cc)) == []
+
+
+def test_psu_deviation_timer_resets_when_readback_catches_up():
+    mon, clock = _mon()
+    bad = PsuReading(10.0, 1.2, PsuMode.CV)
+    good = PsuReading(12.0, 1.4, PsuMode.CV)
+    for reading in (bad, bad, good, bad, bad):
+        assert mon.check(_sample(clock, psu_command_v=12, psu_output_on=True, psu_reading=reading)) == []
+        clock.t += 1.0
+
+
+def test_psu_deviation_respects_supply_floor():
+    mon, clock = _mon()
+    floor = PsuReading(1.03, 0.01, PsuMode.CV)  # 1685B: 0.2 V commanded, 1.0 V is the lowest it can do
+    for _ in range(5):
+        assert mon.check(_sample(clock, psu_command_v=0.2, psu_output_on=True, psu_reading=floor, psu_min_v=1.0)) == []
+        clock.t += 1.0
+    # Without the floor the same reading is a real deviation once it persists.
+    mon2, clock2 = _mon()
+    alarms = []
+    for _ in range(5):
+        alarms = mon2.check(_sample(clock2, psu_command_v=0.2, psu_output_on=True, psu_reading=floor))
+        clock2.t += 1.0
+    assert codes(alarms) == {AlarmCode.PSU_DEVIATION}
 
 
 def test_clamp_voltage():

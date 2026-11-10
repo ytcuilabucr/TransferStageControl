@@ -7,8 +7,10 @@ Rules checked by :meth:`SafetyMonitor.check`:
 
 * ``OVER_TEMP``  (trip)    temperature >= t_max_c.
 * ``STALE_TEMP`` (trip)    no fresh, finite temperature reading for > stale_temp_s.
-* ``PSU_DEVIATION`` (warn) PSU readback differs from the command by > tolerance
-  (not raised while the supply is current-limited, where a lower voltage is expected).
+* ``PSU_DEVIATION`` (warn) PSU readback differs from the command by > tolerance for
+  longer than ``deviation_hold_s`` (the readback lags a step while the supply slews).
+  Not raised while the supply is current-limited, where a lower voltage is expected.
+  With the output on, the expected voltage is at least the supply's ``v_min`` floor.
 
 Trips latch until :meth:`SafetyMonitor.acknowledge`; while latched the PSU must
 stay off (:meth:`SafetyMonitor.enforce` does that). Voltage commands go through
@@ -63,6 +65,7 @@ class SafetySample:
     ``temperature_time`` is the clock time of the last *successful* reading (None
     if there has never been one). ``psu_command_v`` is the voltage last sent to the
     PSU and ``psu_reading`` its latest readback (None if unavailable).
+    ``psu_min_v`` is the supply's lowest programmable voltage (its output-on floor).
     """
 
     temperature_c: float | None
@@ -70,6 +73,7 @@ class SafetySample:
     psu_command_v: float = 0.0
     psu_output_on: bool = False
     psu_reading: PsuReading | None = None
+    psu_min_v: float = 0.0
     now: float | None = None
 
 
@@ -79,6 +83,7 @@ class SafetyMonitor:
         limits: LimitsConfig,
         *,
         voltage_tolerance_v: float = 0.5,
+        deviation_hold_s: float = 3.0,
         clock: Clock = time.monotonic,
     ) -> None:
         self._lock = threading.RLock()
@@ -89,6 +94,8 @@ class SafetyMonitor:
         self.z_max_um = float(limits.z_max_um)
         self.stale_temp_s = float(limits.stale_temp_s)
         self.voltage_tolerance_v = float(voltage_tolerance_v)
+        self.deviation_hold_s = float(deviation_hold_s)
+        self._deviation_since: float | None = None
         self._started = clock()
         self._latched: dict[AlarmCode, Alarm] = {}
 
@@ -115,17 +122,25 @@ class SafetyMonitor:
             active.append(Alarm(AlarmCode.STALE_TEMP, Severity.TRIP, f"{what} (limit {self.stale_temp_s:g} s)"))
 
         r = sample.psu_reading
+        deviating = False
         if r is not None:
-            expected = sample.psu_command_v if sample.psu_output_on else 0.0
+            expected = max(sample.psu_command_v, sample.psu_min_v) if sample.psu_output_on else 0.0
             current_limited = r.mode is PsuMode.CC and r.voltage < expected
-            if not current_limited and abs(r.voltage - expected) > self.voltage_tolerance_v:
-                active.append(
-                    Alarm(
-                        AlarmCode.PSU_DEVIATION,
-                        Severity.WARNING,
-                        f"PSU reads {r.voltage:.2f} V, expected {expected:.2f} V",
-                    )
+            deviating = not current_limited and abs(r.voltage - expected) > self.voltage_tolerance_v
+        with self._lock:
+            if not deviating:
+                self._deviation_since = None
+            elif self._deviation_since is None:
+                self._deviation_since = now
+            persistent = deviating and now - self._deviation_since >= self.deviation_hold_s
+        if persistent:
+            active.append(
+                Alarm(
+                    AlarmCode.PSU_DEVIATION,
+                    Severity.WARNING,
+                    f"PSU reads {r.voltage:.2f} V, expected {expected:.2f} V",
                 )
+            )
 
         with self._lock:
             for a in active:
