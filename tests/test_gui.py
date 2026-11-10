@@ -74,6 +74,24 @@ def test_set_temperature_starts_ramping(gui, qtbot):
     assert tab.psu_btn.isChecked()
 
 
+def test_ramp_off_steps_setpoint_to_target(gui, qtbot):
+    window, controller, _ = gui
+    tab = window.temperature
+    assert tab.ramp_btn.isChecked() and tab.rate_spin.isEnabled()
+    tab.ramp_btn.click()  # Ramp: Off
+    assert not tab.ramp_btn.isChecked() and not tab.rate_spin.isEnabled()
+    assert tab.ramp_btn.text() == "Ramp: Off"
+    tab.rate_spin.setValue(10.0)  # ignored while ramp is off
+    tab.sp_spin.setValue(80.0)
+    tab.set_btn.click()
+    qtbot.waitUntil(
+        lambda: controller.last_thermal.target_sp_c == pytest.approx(80.0)
+        and controller.last_thermal.program_sp_c == pytest.approx(80.0),
+        timeout=3000,
+    )
+    assert not controller.last_thermal.ramping
+
+
 def test_autotune_panel_start_cancel_and_apply(gui, qtbot):
     from transferstage.control.autotune import (
         RECOMMENDED_RULE,

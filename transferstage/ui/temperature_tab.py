@@ -2,7 +2,7 @@
 
 ``TemperaturePanel`` owns the thermal widgets and hands them to the main window:
 
-* ``control_panel``  – left column "Temperature Control": ramp rate, set point, Set, PSU output
+* ``control_panel``  – left column "Temperature Control": ramp rate, Ramp on/off, set point, Set, PSU output
 * ``settings_page``  – centre tab "Settings": SN#, PID period / reinitialize, PID gains, PV,
                        program SP, DMM / PSU, ramp control readouts
 * ``profile_page``   – centre tab "Profile": multi-segment ramp/hold editor
@@ -104,13 +104,22 @@ class TemperaturePanel(QObject):
         self.rate_spin.setToolTip("°C/min; 0 = step change")
         self.sp_spin = spin(0, self.t_max, 20.0, decimals=2, step=1)
         self.sp_spin.setToolTip("°C")
-        self.ramping_led = Led("Ramping", AMBER)
+        self.ramp_btn = QPushButton()
+        self.ramp_btn.setCheckable(True)
+        self.ramp_btn.setToolTip(
+            "On: Set ramps the set point at the ramp rate.\nOff: Set jumps the set point straight to the target."
+        )
+        self.ramp_btn.setStyleSheet(
+            f"QPushButton {{ font-weight:bold; }} QPushButton:checked {{ background:{AMBER}; color:black; }}"
+        )
+        self.ramp_btn.toggled.connect(self._on_ramp_toggled)
+        self.ramp_btn.setChecked(True)
         self.set_btn = QPushButton("✔ Set")
         self.set_btn.setMinimumHeight(34)
         self.set_btn.clicked.connect(self.apply_setpoint)
         grid.addWidget(QLabel("Ramp rate (deg/min)"), 0, 0, Qt.AlignRight)
         grid.addWidget(self.rate_spin, 0, 1)
-        grid.addWidget(self.ramping_led, 0, 2)
+        grid.addWidget(self.ramp_btn, 0, 2)
         grid.addWidget(QLabel("setpoint (°C)"), 1, 0, Qt.AlignRight)
         grid.addWidget(self.sp_spin, 1, 1)
         grid.addWidget(self.set_btn, 1, 2)
@@ -170,6 +179,9 @@ class TemperaturePanel(QObject):
         self.rc_rate = indicator("—", 80)
         self.rc_sp = indicator("—", 80)
         self.ascending_led = Led("", GREEN, off_color=LED_GREEN_OFF)
+        self.ramping_led = Led("", AMBER)
+        self.ramping_led.setToolTip("On while the program set point is still moving toward the target")
+        rf.addRow("Ramping?", self.ramping_led)
         rf.addRow("OG setpoint", self.rc_og)
         rf.addRow("Ramp rate (deg/min)", self.rc_rate)
         rf.addRow("setpoint", self.rc_sp)
@@ -370,9 +382,17 @@ class TemperaturePanel(QObject):
     # ------------------------------------------------------------------ commands
 
     def apply_setpoint(self) -> None:
-        self._last_rate = float(self.rate_spin.value())
-        self.c.set_target.emit(float(self.sp_spin.value()), self._last_rate)
-        self.message.emit(f"Set point {self.sp_spin.value():g} °C at {self.rate_spin.value():g} °C/min")
+        sp = float(self.sp_spin.value())
+        self._last_rate = float(self.rate_spin.value()) if self.ramp_btn.isChecked() else 0.0
+        self.c.set_target.emit(sp, self._last_rate)
+        if self._last_rate > 0:
+            self.message.emit(f"Set point {sp:g} °C, ramping at {self._last_rate:g} °C/min")
+        else:
+            self.message.emit(f"Set point {sp:g} °C (step, no ramp)")
+
+    def _on_ramp_toggled(self, on: bool) -> None:
+        self.ramp_btn.setText("Ramp: On" if on else "Ramp: Off")
+        self.rate_spin.setEnabled(on)
 
     def _on_psu_clicked(self, checked: bool) -> None:
         self.c.set_psu_enabled.emit(checked)
