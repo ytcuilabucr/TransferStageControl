@@ -1,52 +1,49 @@
-# TransferStageControl configuration.
-# Hard safety limits are enforced in code: limits.t_max_c <= 300 °C, limits.v_max <= 24 V,
-# pid.output_high <= limits.v_max. Values above these are rejected at load time.
-
 devices:
-  z_serial: "27270114"        # KCube DC Servo (Z stage)
-  rotator_serial: "55524924"  # Integrated Stepper (rotator)
-  psu_port: COM4              # B&K 1685B
-  dmm_visa: DMM               # VISA alias of the RTD multimeter
-  kinesis_path: 'C:\Program Files\Thorlabs\Kinesis'
-  simulate:                   # true = use the built-in simulator instead of hardware
-    z: true
-    rotator: true
-    psu: true
-    dmm: true
-
+  z_serial: '27270114'
+  rotator_serial: '55524924'
+  psu_port: COM4
+  dmm_visa: DMM
+  kinesis_path: C:\Program Files\Thorlabs\Kinesis
+  simulate:
+    z: false
+    rotator: false
+    psu: false
+    dmm: false
 pid:
-  kc: 0.5          # proportional gain (V/°C)
-  ti_min: 1.0      # integral time, minutes (0 disables integral)
-  td_min: 0.0      # derivative time, minutes
-  period_ms: 500   # control loop period
-  output_low: 0.0  # V
-  output_high: 24.0  # V, must be <= limits.v_max
-
+  kc: 3.634
+  ti_min: 0.7272
+  td_min: 0.0
+  period_ms: 500
+  output_low: 0.0
+  output_high: 24.0
+  ff_k_c_per_v2: 0.618
+  ff_t_amb_c: 37.7
+  ff_tau_s: 265.0
 ramp:
-  default_rate_deg_min: 10.0  # 0 = step change
-
+  default_rate_deg_min: 10.0
 motion:
-  speed_steps_um_s: [1.0, 10.0, 20.0, 50.0, 200.0]  # Z speeds for Speed Knob positions 0..4
-
+  speed_steps_um_s:
+  - 1.0
+  - 5.0
+  - 20.0
+  - 50.0
+  - 200.0
 limits:
-  t_max_c: 300.0     # over-temperature trip, °C (max 300)
-  v_max: 24.0        # PSU voltage cap, V (max 24)
-  i_max: 3.0         # PSU current limit, A
-  z_min_um: 0.0      # Z soft limits, µm
+  t_max_c: 300.0
+  v_max: 24.0
+  i_max: 0.8
+  z_min_um: 0.0
   z_max_um: 25000.0
-  stale_temp_s: 5.0  # PSU off if no fresh temperature reading for this long
-
-keys:              # action -> Qt shortcut string; match the TourBox Console mapping
+  stale_temp_s: 5.0
+keys:
   safe_lock: Ctrl+F1
   cancel_motion: Ctrl+F6
   speed_up: Ctrl+F4
   speed_down: Ctrl+F5
   jog_up: Ctrl+F2
   jog_down: Ctrl+F3
-  mark: Ctrl+F7               # event mark in the session CSV
-
+  mark: Ctrl+F7
 logging:
   dir: logs
-  interval_s: 1.0  # data-log sample interval
-
-presets: []        # named Z + angle positions saved from the Kinesis GUI tab: [{name, z_um, angle_deg}, ...]
+  interval_s: 1.0
+presets: []
