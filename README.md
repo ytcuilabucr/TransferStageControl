@@ -54,7 +54,7 @@ Edit `config.yaml` in the project root. Sections:
 | `devices` | serial numbers, PSU COM port, DMM VISA alias, Kinesis path, `simulate` flags for each device |
 | `pid`     | `kc`, `ti_min`, `td_min` (NI-style, minutes), `period_ms`, `output_low`/`output_high` (V) |
 | `ramp`    | `default_rate_deg_min` (0 = step change) |
-| `limits`  | `t_max_c` (≤ 300), `v_max` (≤ 24), `i_max`, Z soft limits (µm), `stale_temp_s` |
+| `limits`  | `t_max_c` (≤ 300), `v_max` (≤ 24), `i_max`, Z soft limits (µm), `stale_temp_s`, `idle_timeout_min` / `idle_grace_min` |
 | `keys`    | action → Qt shortcut string; set these to match the TourBox Console mapping |
 | `logging` | log directory and data-log interval |
 
@@ -153,6 +153,10 @@ What the software enforces (GUI and scripting API alike):
   switched on again until the alarm is acknowledged.
 - **Stale temperature trip:** if no valid reading arrives for `limits.stale_temp_s` (DMM unplugged, VISA error),
   the PSU switches off the same way.
+- **Idle heater watchdog (GUI only):** if the PSU output is on and nobody has touched the keyboard or mouse (in any
+  program on the PC) for `limits.idle_timeout_min` (20 min), an alarm window pops up on top with a countdown. If nobody
+  clicks "I'm here" within `limits.idle_grace_min` (3 min), the PSU output switches off (not latched; it can be switched
+  on again). The watchdog is on at every start; the checkbox next to Stop turns it off after a confirmation.
 - **PSU deviation warning** when the readback differs from the command by more than 0.5 V (not while current-limited).
 - **Z soft limits:** moves outside `z_min_um`–`z_max_um` are refused, and jogs stop at the limit. **Safe Lock** blocks
   every motion command except Cancel.

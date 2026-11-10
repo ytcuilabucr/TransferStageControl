@@ -1,6 +1,6 @@
 """Settings tab: edit and save config.yaml.
 
-Key bindings apply immediately on Save; everything else (devices, simulate
+Key bindings and the idle-watchdog times apply immediately on Save; everything else (devices, simulate
 flags, PID defaults and period, limits, logging) takes effect on restart.
 The limit fields cannot be set above the hard limits (300 °C, 24 V).
 """
@@ -162,12 +162,18 @@ class SettingsTab(QWidget):
         self.z_min = spin(-1e6, 1e6, 0, decimals=1, step=100, suffix=" µm")
         self.z_max = spin(-1e6, 1e6, 0, decimals=1, step=100, suffix=" µm")
         self.stale = spin(0.1, 600, 5, decimals=1, step=1, suffix=" s")
+        self.idle_timeout = spin(1, 1440, 20, decimals=1, step=5, suffix=" min")
+        self.idle_timeout.setToolTip("Heater on and no keyboard/mouse input on this PC for this long -> idle alarm")
+        self.idle_grace = spin(0.5, 60, 3, decimals=1, step=1, suffix=" min")
+        self.idle_grace.setToolTip("Idle alarm not answered within this time -> heater off")
         f.addRow("Max temperature:", self.t_max)
         f.addRow("Max PSU voltage:", self.v_max)
         f.addRow("PSU current limit:", self.i_max)
         f.addRow("Z soft limit min:", self.z_min)
         f.addRow("Z soft limit max:", self.z_max)
         f.addRow("Stale temperature:", self.stale)
+        f.addRow("Idle alarm after:", self.idle_timeout)
+        f.addRow("Idle heater-off after:", self.idle_grace)
         return g
 
     def _build_logging(self) -> QGroupBox:
@@ -223,6 +229,8 @@ class SettingsTab(QWidget):
         self.z_min.setValue(lim.z_min_um)
         self.z_max.setValue(lim.z_max_um)
         self.stale.setValue(lim.stale_temp_s)
+        self.idle_timeout.setValue(lim.idle_timeout_min)
+        self.idle_grace.setValue(lim.idle_grace_min)
         self.log_dir.setText(cfg.logging.dir)
         self.log_interval.setValue(cfg.logging.interval_s)
         for action, edit in self.key_edits.items():
@@ -265,6 +273,8 @@ class SettingsTab(QWidget):
                 "z_min_um": self.z_min.value(),
                 "z_max_um": self.z_max.value(),
                 "stale_temp_s": self.stale.value(),
+                "idle_timeout_min": self.idle_timeout.value(),
+                "idle_grace_min": self.idle_grace.value(),
             },
             "keys": keys,
             "logging": {"dir": self.log_dir.text().strip(), "interval_s": self.log_interval.value()},

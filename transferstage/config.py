@@ -145,6 +145,8 @@ class LimitsConfig:
     z_min_um: float = 0.0
     z_max_um: float = 25000.0
     stale_temp_s: float = 5.0
+    idle_timeout_min: float = 20.0  # heater on and no keyboard/mouse input this long -> idle alarm
+    idle_grace_min: float = 3.0  # idle alarm unanswered this long -> heater off
 
     def __post_init__(self) -> None:
         for f in dataclasses.fields(self):
@@ -154,6 +156,8 @@ class LimitsConfig:
         _require(self.i_max > 0, "limits.i_max must be > 0 A")
         _require(self.z_min_um < self.z_max_um, "limits.z_min_um must be < limits.z_max_um")
         _require(self.stale_temp_s > 0, "limits.stale_temp_s must be > 0 s")
+        _require(self.idle_timeout_min > 0, "limits.idle_timeout_min must be > 0 min")
+        _require(self.idle_grace_min > 0, "limits.idle_grace_min must be > 0 min")
 
 
 def _default_keys() -> dict[str, str]:

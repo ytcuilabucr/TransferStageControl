@@ -35,6 +35,8 @@ limits:
   z_min_um: 0.0
   z_max_um: 25000.0
   stale_temp_s: 5.0
+  idle_timeout_min: 20.0
+  idle_grace_min: 3.0
 keys:
   safe_lock: Ctrl+F1
   cancel_motion: Ctrl+F6

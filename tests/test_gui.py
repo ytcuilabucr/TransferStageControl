@@ -339,3 +339,47 @@ def test_check_connection_reports_and_reconnects(gui, qtbot):
     assert results[2]["z"][0] and results[2]["z"][1].startswith("connected; responding")
     assert controller.device_connected("z")
     assert "z" not in controller.connect_errors
+
+
+def test_idle_watchdog_on_by_default_and_off_needs_confirmation(gui, monkeypatch):
+    window, controller, _ = gui
+    assert window.watchdog_chk.isChecked() and window.watchdog.enabled
+    answers = [False]
+    monkeypatch.setattr(window, "_confirm_disable_watchdog", lambda: answers.pop(0))
+    window.watchdog_chk.click()  # declined
+    assert window.watchdog_chk.isChecked() and window.watchdog.enabled
+    answers.append(True)
+    window.watchdog_chk.click()  # confirmed
+    assert not window.watchdog_chk.isChecked() and not window.watchdog.enabled
+    window.watchdog_chk.click()  # back on, no confirmation needed
+    assert window.watchdog.enabled
+
+
+def test_idle_alarm_unanswered_switches_heater_off(gui, qtbot):
+    window, controller, _ = gui
+    wd = window.watchdog
+    wd.set_times(1.0, 1.0)
+    wd._system_idle = lambda: 999.0  # nobody touches the PC
+    wd._last_app_input = -1e9
+    window.temperature.psu_btn.click()
+    qtbot.waitUntil(lambda: controller.last_thermal.psu_on, timeout=3000)
+    qtbot.waitUntil(window.idle_dialog.isVisible, timeout=5000)
+    assert window.idle_dialog.here_btn.isVisible()
+    qtbot.waitUntil(lambda: not controller.last_thermal.psu_on, timeout=5000)
+    assert window.idle_dialog.isVisible() and window.idle_dialog.ok_btn.isVisible()
+    assert not controller.devices.psu.is_on
+    window.idle_dialog.ok_btn.click()
+    assert not window.idle_dialog.isVisible()
+
+
+def test_idle_alarm_answered_keeps_heater_on(gui, qtbot):
+    window, controller, _ = gui
+    wd = window.watchdog
+    wd.set_times(1.0, 30.0)
+    wd._system_idle = lambda: 999.0
+    wd._last_app_input = -1e9
+    window.temperature.psu_btn.click()
+    qtbot.waitUntil(window.idle_dialog.isVisible, timeout=5000)
+    window.idle_dialog.here_btn.click()
+    assert not window.idle_dialog.isVisible()
+    assert controller.last_thermal.psu_on

@@ -1,6 +1,6 @@
 """Main window, laid out like the LabVIEW front panel (gui_v2.vi).
 
-    [Stop]
+    [Stop] [x Idle heater watchdog]                         Note: [...] [Mark]
     Z-Controller        | TourBox GUI | Kinesis GUI | Settings | ... |   PV/SP legend
     Temperature Control |   (centre tab pages)                      |   temperature chart
     Sample Rotator      |   TourBox shortcut legend                 |   voltage chart
@@ -16,6 +16,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QCloseEvent, QColor, QIcon, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -29,6 +30,7 @@ from PyQt5.QtWidgets import (
 
 from ..app import DEVICE_NAMES, AppController
 from ..config import PROJECT_ROOT
+from .idle_watchdog import IdleAlarmDialog, IdleWatchdog
 from .input_map import InputMap
 from .log_tab import LogTab
 from .manual_tab import ManualPanel
@@ -84,6 +86,12 @@ class MainWindow(QMainWindow):
         self.stop_btn.setIcon(QIcon(red_square))
         self.stop_btn.clicked.connect(self.stop_all)
         top.addWidget(self.stop_btn)
+        top.addSpacing(16)
+        lim = controller.config.limits
+        self.watchdog_chk = QCheckBox()
+        self.watchdog_chk.setChecked(True)
+        self.watchdog_chk.clicked.connect(self._on_watchdog_clicked)
+        top.addWidget(self.watchdog_chk)
         top.addStretch(1)
         top.addWidget(QLabel("Note:"))
         self.note_edit = QLineEdit()
@@ -165,6 +173,20 @@ class MainWindow(QMainWindow):
         self.input_map.action.connect(self._on_action)
         self.input_map.install()
 
+        # idle-heater watchdog (on at every start; turning it off needs confirmation)
+        self.watchdog = IdleWatchdog(
+            lambda: self.c.psu_on, timeout_s=lim.idle_timeout_min * 60, grace_s=lim.idle_grace_min * 60, parent=self
+        )
+        self.idle_dialog = IdleAlarmDialog(self)
+        self.watchdog.warning_started.connect(self._on_idle_warning)
+        self.watchdog.countdown.connect(self.idle_dialog.set_remaining)
+        self.watchdog.warning_cleared.connect(lambda _reason: self.idle_dialog.hide())
+        self.watchdog.heater_off.connect(self._on_idle_shutoff)
+        self.idle_dialog.answered.connect(self.watchdog.acknowledge)
+        self.idle_dialog.off_requested.connect(self._on_idle_off_requested)
+        self._update_watchdog_text()
+        self.watchdog.start()
+
         self._conn_timer = QTimer(self)
         self._conn_timer.timeout.connect(self._refresh_connections)
         self._conn_timer.start(1000)
@@ -230,10 +252,60 @@ class MainWindow(QMainWindow):
         self.note_edit.clear()
         self._notify(f"Marked: {note}" if note is not None else "Marked in the log (data log is off)")
 
+    # ------------------------------------------------------------------ idle watchdog
+
+    def _update_watchdog_text(self) -> None:
+        w = self.watchdog
+        self.watchdog_chk.setText(f"Idle heater watchdog ({w.timeout_s / 60:g} + {w.grace_s / 60:g} min)")
+        self.watchdog_chk.setToolTip(
+            f"Heater on and no keyboard/mouse input on this PC for {w.timeout_s / 60:g} min -> alarm;\n"
+            f"alarm not answered within {w.grace_s / 60:g} min -> heater off."
+        )
+        self.watchdog_chk.setStyleSheet("" if w.enabled else f"QCheckBox {{ color:{RED}; font-weight:bold; }}")
+
+    def _confirm_disable_watchdog(self) -> bool:
+        r = QMessageBox.warning(
+            self,
+            "Idle heater watchdog",
+            "Turn the idle heater watchdog OFF?\n\n"
+            "The heater will then stay on even if nobody is at the PC. "
+            "It is switched on again at the next program start.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return r == QMessageBox.Yes
+
+    def _on_watchdog_clicked(self, checked: bool) -> None:
+        if not checked and not self._confirm_disable_watchdog():
+            self.watchdog_chk.setChecked(True)
+            return
+        self.watchdog.set_enabled(checked)
+        self._update_watchdog_text()
+        self.c.mark(f"idle watchdog {'on' if checked else 'OFF'}")
+        self._notify("Idle heater watchdog on" if checked else "Idle heater watchdog OFF", error=not checked)
+
+    def _on_idle_warning(self, grace_s: float) -> None:
+        self.c.mark("idle alarm: heater on, no input")
+        self.idle_dialog.show_warning(self.watchdog.timeout_s / 60, grace_s)
+
+    def _on_idle_shutoff(self) -> None:
+        self.c.set_psu_enabled.emit(False)
+        if self.idle_dialog.ok_btn.isHidden():  # first time, not a retry
+            self.c.mark("idle alarm not answered: heater off")
+            self.idle_dialog.show_shut_off()
+            self._notify("Idle alarm not answered: PSU output switched off", error=True)
+
+    def _on_idle_off_requested(self) -> None:
+        self.c.set_psu_enabled.emit(False)
+        self.c.mark("idle alarm: heater off by user")
+        self._notify("PSU output off")
+
     def _on_settings_saved(self, cfg) -> None:
         self.input_map.set_bindings(cfg.keys)
         self.c.config.keys = dict(cfg.keys)
         self._update_legend(cfg.keys)
+        self.watchdog.set_times(cfg.limits.idle_timeout_min * 60, cfg.limits.idle_grace_min * 60)
+        self._update_watchdog_text()
 
     def _update_legend(self, keys: dict[str, str]) -> None:
         lines = []
@@ -267,6 +339,8 @@ class MainWindow(QMainWindow):
                 ev.ignore()
                 return
         self._conn_timer.stop()
+        self.watchdog.stop()
+        self.idle_dialog.hide()
         self.input_map.uninstall()
         # Shutdown blocks for a few seconds (Kinesis Disconnect ~0.6 s per stage, then the Kinesis
         # USB manager takes ~2 s to unload at process exit). Hide first so the click feels instant.
