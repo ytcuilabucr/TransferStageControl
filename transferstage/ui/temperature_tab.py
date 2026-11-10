@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import deque
 
 import numpy as np
@@ -53,6 +54,13 @@ PV_COLOR = "#1f77d4"
 SP_COLOR = "#e0303a"
 
 
+def _clock_axis() -> pg.DateAxisItem:
+    """Local clock-time axis whose finest labels are HH:MM:SS (no SS.mmm on short spans)."""
+    axis = pg.DateAxisItem()
+    axis.zoomLevels.pop(1, None)  # pyqtgraph's sub-second zoom level
+    return axis
+
+
 class TemperaturePanel(QObject):
     message = pyqtSignal(str)
 
@@ -68,6 +76,10 @@ class TemperaturePanel(QObject):
         self._target: deque[float] = deque(maxlen=MAX_POINTS)
         self._prog: deque[float] = deque(maxlen=MAX_POINTS)
         self._volt: deque[float] = deque(maxlen=MAX_POINTS)
+        # Chart x = wall0 + sample.t: epoch seconds for the clock-time axis, but advancing on
+        # the worker's monotonic clock so an NTP/DST change can't make the trace jump.
+        self._wall0: float | None = None
+        self._last_raw_t: float | None = None
 
         self.alarm_banner = self._build_alarm_banner()
         self.control_panel = self._build_control_panel()
@@ -342,7 +354,7 @@ class TemperaturePanel(QObject):
         v.addLayout(legend)
 
         pg.setConfigOptions(antialias=True)
-        self.temp_plot = pg.PlotWidget(background="w")
+        self.temp_plot = pg.PlotWidget(background="w", axisItems={"bottom": _clock_axis()})
         self.temp_plot.setLabel("left", "Temperature", units="°C")
         self.temp_plot.showGrid(x=True, y=True, alpha=0.25)
         self.curve_T = self.temp_plot.plot(pen=pg.mkPen(PV_COLOR, width=2), name="PV")
@@ -350,9 +362,9 @@ class TemperaturePanel(QObject):
         self.curve_target = self.temp_plot.plot(
             pen=pg.mkPen(SP_COLOR, width=1, style=Qt.DashLine), name="Target SP"
         )
-        self.volt_plot = pg.PlotWidget(background="w")
+        self.volt_plot = pg.PlotWidget(background="w", axisItems={"bottom": _clock_axis()})
         self.volt_plot.setLabel("left", "Voltage", units="V")
-        self.volt_plot.setLabel("bottom", "Time", units="s")
+        self.volt_plot.setLabel("bottom", "Time")
         self.volt_plot.showGrid(x=True, y=True, alpha=0.25)
         self.volt_plot.setXLink(self.temp_plot)
         self.curve_V = self.volt_plot.plot(pen=pg.mkPen("#2a8a2a", width=2), name="V")
@@ -365,7 +377,7 @@ class TemperaturePanel(QObject):
 
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Window:"))
-        self.window_spin = spin(0.5, 24 * 60, 10, decimals=1, step=1, suffix=" min")
+        self.window_spin = spin(0.5, 24 * 60, 2, decimals=1, step=1, suffix=" min")
         self.window_spin.valueChanged.connect(lambda _: self.redraw())
         bar.addWidget(self.window_spin)
         self.pause_chk = QCheckBox("Pause")
@@ -586,7 +598,11 @@ class TemperaturePanel(QObject):
         else:
             self.alarm_banner.setVisible(False)
 
-        self._t.append(s.t)
+        if self._wall0 is None or (self._last_raw_t is not None and s.t < self._last_raw_t):
+            # First sample, or a new worker restarted its clock: re-anchor to wall time.
+            self._wall0 = time.time() - s.t
+        self._last_raw_t = s.t
+        self._t.append(self._wall0 + s.t)
         self._temp.append(np.nan if s.temperature_c is None else s.temperature_c)
         self._target.append(s.target_sp_c)
         self._prog.append(s.program_sp_c)
