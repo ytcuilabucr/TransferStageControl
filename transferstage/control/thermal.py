@@ -305,7 +305,8 @@ class ThermalWorker(QObject):
             log.warning("thermal: autotune aborted: %s", st.message)
         if resume_pid:
             self.ramp.reset(at.params.setpoint_c)
-            self.pid.reset(integral=at.params.bias_v)  # bumpless hand-back to the PID
+            # Bumpless hand-back: the I term is what the feedforward does not already supply.
+            self.pid.reset(integral=at.params.bias_v - self.pid.feedforward_v(at.params.setpoint_c))
         self.autotune_finished.emit(st)
 
     @pyqtSlot()

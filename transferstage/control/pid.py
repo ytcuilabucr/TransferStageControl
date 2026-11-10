@@ -1,6 +1,6 @@
 """PID controller with the NI LabVIEW ``PID.vi`` parameterization.
 
-    u = Kc * ( e  +  (1/Ti) ∫ e dt  +  Td * d(-PV)/dt )        Ti, Td in minutes
+    u = FF(SP, dSP/dt)  +  Kc * ( e  +  (1/Ti) ∫ e dt  +  Td * d(-PV)/dt )        Ti, Td in minutes
 
 * Integral: trapezoidal, stored in output units (so gain changes are bumpless).
   ``Ti = 0`` disables the integral action (and clears the integrator).
@@ -9,7 +9,13 @@
 * Output clamped to ``[output_low, output_high]``; ``output_high`` may never exceed
   the hard 24 V limit. Anti-windup by conditional integration: the integrator is
   frozen while the output is saturated and the error would drive it further in,
-  and the integrator itself is kept inside the output range.
+  and feedforward + integrator is kept inside the output range.
+* Feedforward (optional, :class:`HeaterFeedforward`): the voltage the heater model
+  ``tau * dT/dt = k * V**2 - (T - T_amb)`` needs to follow the set point, i.e. the
+  hold voltage plus the extra (or reduced) power a ramp needs. The integrator then
+  only holds the model error, so it does not have to wind up during a ramp or
+  rebuild from zero after the output sat at 0 V on a cool-down. ``dSP/dt`` is taken
+  from successive set points (the ramp generator's program SP).
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ class PidTerms:
     d: float
     output: float
     saturated: bool
+    ff: float = 0.0
 
 
 def _finite(x: float, name: str) -> float:
@@ -37,6 +44,29 @@ def _finite(x: float, name: str) -> float:
     if not math.isfinite(x):
         raise ValueError(f"{name} must be finite, got {x!r}")
     return x
+
+
+@dataclass(frozen=True)
+class HeaterFeedforward:
+    """Heater voltage ``V = sqrt((SP + tau_s * dSP/dt - t_amb_c) / k_c_per_v2)``; 0 when that is negative.
+
+    ``k_c_per_v2`` is the steady-state rise per V² and ``tau_s`` the thermal time
+    constant (0 = hold voltage only, no ramp term).
+    """
+
+    k_c_per_v2: float
+    t_amb_c: float = 22.0
+    tau_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not (math.isfinite(self.k_c_per_v2) and self.k_c_per_v2 > 0):
+            raise ValueError("feedforward needs a finite k_c_per_v2 > 0")
+        if not (math.isfinite(self.t_amb_c) and math.isfinite(self.tau_s) and self.tau_s >= 0):
+            raise ValueError("feedforward needs a finite t_amb_c and a finite tau_s >= 0")
+
+    def __call__(self, setpoint_c: float, rate_c_per_s: float = 0.0) -> float:
+        target = setpoint_c + self.tau_s * rate_c_per_s - self.t_amb_c
+        return math.sqrt(max(target, 0.0) / self.k_c_per_v2)
 
 
 class PID:
@@ -48,15 +78,28 @@ class PID:
         *,
         output_low: float = 0.0,
         output_high: float = HARD_V_MAX,
+        feedforward: HeaterFeedforward | None = None,
     ) -> None:
         self._lock = threading.RLock()
+        self.feedforward = feedforward
         self.set_tunings(kc, ti_min, td_min)
         self.set_output_limits(output_low, output_high)
         self.reset()
 
     @classmethod
     def from_config(cls, cfg: PidConfig) -> PID:
-        return cls(cfg.kc, cfg.ti_min, cfg.td_min, output_low=cfg.output_low, output_high=cfg.output_high)
+        ff = None
+        if cfg.ff_k_c_per_v2 > 0:
+            ff = HeaterFeedforward(cfg.ff_k_c_per_v2, cfg.ff_t_amb_c, cfg.ff_tau_s)
+        return cls(
+            cfg.kc, cfg.ti_min, cfg.td_min, output_low=cfg.output_low, output_high=cfg.output_high, feedforward=ff
+        )
+
+    def feedforward_v(self, setpoint: float, rate_c_per_s: float = 0.0) -> float:
+        """Feedforward output (0 without a model), clamped to the output range."""
+        if self.feedforward is None:
+            return 0.0
+        return min(max(self.feedforward(setpoint, rate_c_per_s), self.output_low), self.output_high)
 
     # ------------------------------------------------------------------ settings
 
@@ -81,18 +124,25 @@ class PID:
         with self._lock:
             self.output_low, self.output_high = low, high
             if hasattr(self, "_integral"):
-                self._integral = min(max(self._integral, low), high)
+                floor = low - high if self.feedforward is not None else low
+                self._integral = min(max(self._integral, floor), high)
 
     # ------------------------------------------------------------------ operation
 
     def reset(self, integral: float = 0.0) -> None:
-        """Clear the controller state (LabVIEW "reinitialize?"). ``integral`` presets the I term."""
+        """Clear the controller state (LabVIEW "reinitialize?"). ``integral`` presets the I term.
+
+        With feedforward the I term is a correction around it and may be negative.
+        """
         with self._lock:
-            self._integral = min(max(_finite(integral, "integral"), self.output_low), self.output_high)
+            lo, hi = self.output_low, self.output_high
+            floor = lo - hi if self.feedforward is not None else lo
+            self._integral = min(max(_finite(integral, "integral"), floor), hi)
             if self.ti_min == 0:
                 self._integral = 0.0
             self._prev_error: float | None = None
             self._prev_pv: float | None = None
+            self._prev_sp: float | None = None
             self.output = self.output_low
             self.last_terms = PidTerms(0.0, self._integral, 0.0, self.output, False)
 
@@ -119,21 +169,24 @@ class PID:
             if self.td_min > 0 and self._prev_pv is not None:
                 d = -self.kc * self.td_min * (pv - self._prev_pv) / dt_min
 
+            rate = 0.0 if self._prev_sp is None else (setpoint - self._prev_sp) / dt_s
+            ff = self.feedforward_v(setpoint, rate)
             i = self._integral
             if self.ti_min > 0:
                 e_avg = error if self._prev_error is None else 0.5 * (error + self._prev_error)
                 candidate = i + self.kc / self.ti_min * e_avg * dt_min
-                u = p + candidate + d
+                u = ff + p + candidate + d
                 winding_up = u > hi and candidate > i
                 winding_down = u < lo and candidate < i
                 if not (winding_up or winding_down):
-                    i = min(max(candidate, lo), hi)
+                    i = min(max(candidate, lo - ff), hi - ff)
             self._integral = i
 
-            raw = p + i + d
+            raw = ff + p + i + d
             out = min(max(raw, lo), hi)
             self._prev_error = error
             self._prev_pv = pv
+            self._prev_sp = setpoint
             self.output = out
-            self.last_terms = PidTerms(p, i, d, out, out != raw)
+            self.last_terms = PidTerms(p, i, d, out, out != raw, ff)
             return out

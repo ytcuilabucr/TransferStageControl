@@ -84,9 +84,17 @@ class PidConfig:
     period_ms: int = 500
     output_low: float = 0.0
     output_high: float = 24.0
+    ff_k_c_per_v2: float = 0.0  # feedforward heater model: steady-state rise per V², °C/V² (0 = off)
+    ff_t_amb_c: float = 22.0  # feedforward ambient temperature, °C
+    ff_tau_s: float = 0.0  # feedforward thermal time constant, s (adds the ramp term; 0 = hold voltage only)
 
     def __post_init__(self) -> None:
         self.kc = _finite(self.kc, "pid.kc")
+        self.ff_k_c_per_v2 = _finite(self.ff_k_c_per_v2, "pid.ff_k_c_per_v2")
+        self.ff_t_amb_c = _finite(self.ff_t_amb_c, "pid.ff_t_amb_c")
+        self.ff_tau_s = _finite(self.ff_tau_s, "pid.ff_tau_s")
+        _require(self.ff_tau_s >= 0, "pid.ff_tau_s must be >= 0 s")
+        _require(self.ff_k_c_per_v2 >= 0, "pid.ff_k_c_per_v2 must be >= 0 (0 disables feedforward)")
         self.ti_min = _finite(self.ti_min, "pid.ti_min")
         self.td_min = _finite(self.td_min, "pid.td_min")
         self.output_low = _finite(self.output_low, "pid.output_low")

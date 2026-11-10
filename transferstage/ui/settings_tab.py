@@ -133,6 +133,13 @@ class SettingsTab(QWidget):
         self.out_lo = spin(0, HARD_V_MAX, 0, decimals=2, step=0.5, suffix=" V")
         self.out_hi = spin(0, HARD_V_MAX, 0, decimals=2, step=0.5, suffix=" V")
         self.rate = spin(0, 1000, 0, decimals=1, step=1, suffix=" °C/min")
+        self.ff_k = spin(0, 1000, 0, decimals=4, step=0.05, suffix=" °C/V²")
+        self.ff_k.setSpecialValueText("Off")
+        self.ff_k.setToolTip("Feedforward heater model T - T_amb = k·V² (0 = no feedforward)")
+        self.ff_tamb = spin(-50, 100, 22, decimals=1, step=1, suffix=" °C")
+        self.ff_tamb.setToolTip("Ambient temperature of the feedforward model")
+        self.ff_tau = spin(0, 100000, 0, decimals=0, step=10, suffix=" s")
+        self.ff_tau.setToolTip("Thermal time constant of the feedforward model; adds the power a ramp needs (0 = off)")
         f.addRow("Kc:", self.kc)
         f.addRow("Ti:", self.ti)
         f.addRow("Td:", self.td)
@@ -140,6 +147,9 @@ class SettingsTab(QWidget):
         f.addRow("Output low:", self.out_lo)
         f.addRow("Output high:", self.out_hi)
         f.addRow("Default ramp rate:", self.rate)
+        f.addRow("Feedforward k:", self.ff_k)
+        f.addRow("Feedforward T_amb:", self.ff_tamb)
+        f.addRow("Feedforward tau:", self.ff_tau)
         return g
 
     def _build_limits(self) -> QGroupBox:
@@ -204,6 +214,9 @@ class SettingsTab(QWidget):
         self.period.setValue(p.period_ms)
         self.out_lo.setValue(p.output_low)
         self.out_hi.setValue(p.output_high)
+        self.ff_k.setValue(p.ff_k_c_per_v2)
+        self.ff_tamb.setValue(p.ff_t_amb_c)
+        self.ff_tau.setValue(p.ff_tau_s)
         self.rate.setValue(cfg.ramp.default_rate_deg_min)
         self.t_max.setValue(lim.t_max_c)
         self.i_max.setValue(lim.i_max)
@@ -239,6 +252,9 @@ class SettingsTab(QWidget):
                 "period_ms": int(self.period.value()),
                 "output_low": self.out_lo.value(),
                 "output_high": self.out_hi.value(),
+                "ff_k_c_per_v2": self.ff_k.value(),
+                "ff_t_amb_c": self.ff_tamb.value(),
+                "ff_tau_s": self.ff_tau.value(),
             },
             "ramp": {"default_rate_deg_min": self.rate.value()},
             "motion": dataclasses.asdict(base.motion),
