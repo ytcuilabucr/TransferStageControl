@@ -12,3 +12,6 @@ reference/**/Libs/
 
 # IDE
 .idea/
+
+# LabVIEW reference project (kept locally, not published)
+reference/
