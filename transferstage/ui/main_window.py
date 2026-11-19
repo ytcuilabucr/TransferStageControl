@@ -42,13 +42,21 @@ log = logging.getLogger(__name__)
 
 DEVICE_LABELS = {"z": "Z", "rotator": "Rotator", "psu": "PSU", "thermometer": "DMM"}
 
-# TourBox control -> action, in the order of the LabVIEW legend
+# TourBox control -> description, actions whose keys are shown. Two columns under the
+# centre tabs: motion (the LabVIEW legend order) and temperature.
 LEGEND = (
-    ("[Side] + [Top]", "Safe Lock", "safe_lock"),
-    ("[Top]", "Cancel Motion", "cancel_motion"),
-    ("[Knob]", "Speed Knob", None),
-    ("[Tall]", "Moving Up", "jog_up"),
-    ("[Short]", "Moving Down", "jog_down"),
+    (
+        ("[Side] + [Top]", "Safe Lock on / off", ("safe_lock",)),
+        ("[Top]", "Cancel Motion", ("cancel_motion",)),
+        ("[Knob]", "Speed Knob ±1", ("speed_up", "speed_down")),
+        ("[Tall]", "Moving Up", ("jog_up",)),
+        ("[Short]", "Moving Down", ("jog_down",)),
+    ),
+    (
+        ("[Dial]", "Setpoint ±1 step", ("setpoint_up", "setpoint_down")),
+        ("[C1]", "Set temperature", ("setpoint_set",)),
+        ("[C2]", "Ramp On / Off", ("ramp_toggle",)),
+    ),
 )
 
 
@@ -235,8 +243,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ actions
 
     def _on_action(self, action: str) -> None:
-        if action == "safe_lock":
+        if action == "safe_lock":  # Side + Top combo in TourBox Console
             self.manual.toggle_safe_lock()
+            self._notify(f"Safe Lock {'on' if self.manual.safe_lock_btn.isChecked() else 'off'} (Side + Top)")
+        elif action == "side_alone":
+            self._notify("Safe Lock unchanged: press Side + Top together")
         elif action == "cancel_motion":
             self.c.cancel_motion.emit()
         elif action == "speed_up":
@@ -245,6 +256,14 @@ class MainWindow(QMainWindow):
             self.manual.nudge_speed(-1)
         elif action == "mark":
             self.add_mark()
+        elif action == "setpoint_up":
+            self.temperature.nudge_setpoint(+1)
+        elif action == "setpoint_down":
+            self.temperature.nudge_setpoint(-1)
+        elif action == "setpoint_set":
+            self.temperature.apply_setpoint()
+        elif action == "ramp_toggle":
+            self.temperature.toggle_ramp()
 
     def add_mark(self) -> None:
         """Mark button / Enter in the note field / mark shortcut: event note in the CSV and the log."""
@@ -303,20 +322,30 @@ class MainWindow(QMainWindow):
     def _on_settings_saved(self, cfg) -> None:
         self.input_map.set_bindings(cfg.keys)
         self.c.config.keys = dict(cfg.keys)
+        self.c.config.ramp.dial_step_c = cfg.ramp.dial_step_c
+        self.temperature.dial_step_c = cfg.ramp.dial_step_c
+        self.c.config.ramp.set_enables_psu = cfg.ramp.set_enables_psu
+        self.temperature.set_enables_psu = cfg.ramp.set_enables_psu
         self._update_legend(cfg.keys)
         self.watchdog.set_times(cfg.limits.idle_timeout_min * 60, cfg.limits.idle_grace_min * 60)
         self._update_watchdog_text()
 
     def _update_legend(self, keys: dict[str, str]) -> None:
-        lines = []
-        for control, what, action in LEGEND:
-            key = keys.get(action, "") if action else ""
-            key = QKeySequence(key, QKeySequence.PortableText).toString(QKeySequence.NativeText) if key else ""
-            text = f"{control} - {what}" + (f"  <span style='color:#666'>({key})</span>" if key else "")
-            if action == "cancel_motion":
-                text = f"<span style='color:{RED}'>{text}</span>"
-            lines.append(text)
-        self.legend_label.setText("<br>".join(lines))
+        def native(action: str) -> str:
+            key = keys.get(action, "")
+            return QKeySequence(key, QKeySequence.PortableText).toString(QKeySequence.NativeText) if key else ""
+
+        columns = []
+        for group in LEGEND:
+            lines = []
+            for control, what, actions in group:
+                shown = " / ".join(k for k in map(native, actions) if k)
+                text = f"{control} - {what}" + (f"&nbsp;&nbsp;<span style='color:#666'>({shown})</span>" if shown else "")
+                if control == "[Top]":
+                    text = f"<span style='color:{RED}'>{text}</span>"
+                lines.append(text)
+            columns.append("<td style='padding:0 14px; vertical-align:top'>" + "<br>".join(lines) + "</td>")
+        self.legend_label.setText("<table><tr>" + "".join(columns) + "</tr></table>")
 
     def stop_all(self) -> None:
         """Stop button: cancel all motion and switch the heater (PSU output) off."""

@@ -101,6 +101,11 @@ def test_stage_refusals_raise(tmp_path):
         assert stage.move_z(-500.0, relative=True) == pytest.approx(19500.0)
         assert stage.rotate(45.0) == pytest.approx(45.0)
         assert stage.rotate(-15.0, relative=True) == pytest.approx(30.0)
+        assert stage.rotate(-90.0) == pytest.approx(-90.0)
+        with pytest.raises(StageError, match="outside"):
+            stage.rotate(91.0)
+        with pytest.raises(StageError, match="outside"):
+            stage.rotate(-1.0, relative=True)
 
 
 def test_safety_trip_raises_and_psu_stays_off(tmp_path):

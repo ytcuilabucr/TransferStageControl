@@ -113,10 +113,15 @@ class PidConfig:
 @dataclass
 class RampConfig:
     default_rate_deg_min: float = 10.0
+    dial_step_c: float = 1.0  # setpoint change per TourBox Dial click (setpoint_up / setpoint_down)
+    set_enables_psu: bool = True  # Set (GUI / TourBox C1) also switches the PSU on (set point > T_amb + 5 °C)
 
     def __post_init__(self) -> None:
         self.default_rate_deg_min = _finite(self.default_rate_deg_min, "ramp.default_rate_deg_min")
         _require(self.default_rate_deg_min >= 0, "ramp.default_rate_deg_min must be >= 0 (0 = step)")
+        self.dial_step_c = _finite(self.dial_step_c, "ramp.dial_step_c")
+        _require(0 < self.dial_step_c <= 100, "ramp.dial_step_c must be in (0, 100] °C")
+        _require(isinstance(self.set_enables_psu, bool), "ramp.set_enables_psu must be true/false")
 
 
 def _default_speed_steps() -> list[float]:
@@ -163,13 +168,18 @@ class LimitsConfig:
 def _default_keys() -> dict[str, str]:
     # Match these to the TourBox Console mapping.
     return {
-        "safe_lock": "Ctrl+F1",
+        "safe_lock": "Ctrl+F1",  # TourBox Side + Top combo (Side alone sends side_alone)
         "cancel_motion": "Ctrl+F6",
         "speed_up": "Ctrl+F4",
         "speed_down": "Ctrl+F5",
         "jog_up": "Ctrl+F2",
         "jog_down": "Ctrl+F3",
         "mark": "Ctrl+F7",  # event mark in the session CSV (not in the TourBox preset; assign a button if wanted)
+        "setpoint_up": "Ctrl+F8",  # TourBox Dial clockwise: setpoint +1 step (staged, not applied)
+        "setpoint_down": "Ctrl+F9",  # TourBox Dial counter-clockwise: setpoint -1 step
+        "setpoint_set": "Ctrl+F10",  # TourBox C1: apply the staged setpoint
+        "ramp_toggle": "Ctrl+F11",  # TourBox C2: Ramp On / Off
+        "side_alone": "Ctrl+F12",  # TourBox Side alone: no action, only a "press Side + Top" hint
     }
 
 

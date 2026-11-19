@@ -53,7 +53,7 @@ Edit `config.yaml` in the project root. Sections:
 |-----------|----------|
 | `devices` | serial numbers, PSU COM port, DMM VISA alias, Kinesis path, `simulate` flags for each device |
 | `pid`     | `kc`, `ti_min`, `td_min` (NI-style, minutes), `period_ms`, `output_low`/`output_high` (V) |
-| `ramp`    | `default_rate_deg_min` (0 = step change) |
+| `ramp`    | `default_rate_deg_min` (0 = step change), `dial_step_c`, `set_enables_psu` (Set switches the PSU on for a set point above T_amb + 5 °C) |
 | `limits`  | `t_max_c` (≤ 300), `v_max` (≤ 24), `i_max`, Z soft limits (µm), `stale_temp_s`, `idle_timeout_min` / `idle_grace_min` |
 | `keys`    | action → Qt shortcut string; set these to match the TourBox Console mapping |
 | `logging` | log directory and data-log interval |
@@ -115,13 +115,26 @@ TourBox changes are needed (change the app side in Settings → Key bindings if 
 
 | Action | TourBox control | Default key |
 |---|---|---|
-| Safe Lock (toggle) | Side, or Side + Top | `Ctrl+F1` |
+| Safe Lock on / off | Side + Top combo (set in TourBox Console) | `Ctrl+F1` |
+| (nothing; status bar hint) | Side alone | `Ctrl+F12` |
 | Cancel Motion | Top | `Ctrl+F6` |
 | Speed Knob +1 position (applied at once) | Knob clockwise | `Ctrl+F4` |
 | Speed down | Knob counter-clockwise | `Ctrl+F5` |
 | Jog Z up while held | Tall | `Ctrl+F2` |
 | Jog Z down while held | Short | `Ctrl+F3` |
 | Event mark in the session CSV | (assign a free button) | `Ctrl+F7` |
+| Setpoint +1 step (staged, not applied) | Dial clockwise (add to the preset) | `Ctrl+F8` |
+| Setpoint −1 step | Dial counter-clockwise (add to the preset) | `Ctrl+F9` |
+| Apply the setpoint (✔ Set) | C1 (add to the preset) | `Ctrl+F10` |
+| Ramp On / Off (for the next Set) | C2 (add to the preset) | `Ctrl+F11` |
+
+Safe Lock from the TourBox needs both buttons, as in the LabVIEW program, so a stray press of
+either one never changes it. In TourBox Console the **Side + Top** combination sends `Ctrl+F1`
+(`safe_lock`, toggles Safe Lock) and **Side** alone sends `Ctrl+F12` (`side_alone`: no action,
+the status bar says to press Side + Top). One press may send its key twice, so a second
+`Ctrl+F1` within 2 s is ignored; wait a moment before toggling again. The on-screen Safe Lock
+button still toggles with one click. Every non-repeating TourBox key is written to
+`logs/app.log` (`input map: key Ctrl+F1 -> safe_lock`), which shows what the TourBox sends.
 
 The shortcuts work whenever an app window is focused. Jogs start on key press and stop on key
 release; auto-repeat is ignored, and a jog stops if the app loses focus. TourBox Console does not
@@ -130,6 +143,16 @@ when it comes up. A tap (released within 40 ms) therefore starts a jog that runs
 of the same key. If a tap is ever missed, Z keeps going to the soft limit: press Top (Cancel Motion)
 or tap the button again. If the knob turns the speed the wrong way, swap the
 `speed_up` / `speed_down` keys.
+
+The Dial only changes the number in the setpoint box (step: Config → *Dial setpoint step*,
+default 1 °C; clicks snap to whole steps, e.g. 21.94 → 22); the box starts at the running setpoint and turns amber while it differs from the running setpoint, and nothing reaches
+the heater until C1 (or ✔ Set). C1 sends two taps per press, so a second Set within 1.5 s is
+ignored; C2 (Ramp On/Off) is guarded the same way. Set uses the Ramp on/off and ramp rate shown in the panel. When the PSU output is off and the new set
+point is more than 5 °C above the feedforward ambient (`pid.ff_t_amb_c`), Set also switches it on
+(`ramp.set_enables_psu`, Config → *Set switches the PSU output on*, default on). This includes ramping
+*down*: with the heater off the stage cools at roughly (T − T_amb)/tau, faster than a 10 °C/min ramp
+above ~70 °C, and it would not hold the new set point. A set point near room temperature leaves the heater
+off; Set never switches it on while a safety trip is latched, and leaves an output that is already on alone. If the Dial turns the setpoint the wrong way, swap the `setpoint_up` / `setpoint_down` keys.
 
 ### PID autotune
 

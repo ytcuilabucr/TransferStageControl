@@ -69,9 +69,46 @@ def test_set_temperature_starts_ramping(gui, qtbot):
     assert s.ramping and s.target_sp_c == pytest.approx(100.0)
     assert s.program_sp_c < 100.0
 
-    tab.psu_btn.click()  # PSU on -> PID drives the heater
+    # Set above the room temperature switched the PSU on (ramp.set_enables_psu) -> PID drives the heater
     qtbot.waitUntil(lambda: controller.last_thermal.psu_on and controller.last_thermal.v_cmd > 0, timeout=3000)
     assert tab.psu_btn.isChecked()
+
+
+def test_set_switches_psu_on_above_ambient(gui, qtbot):
+    window, controller, _ = gui
+    tab = window.temperature
+    order = []
+    controller.set_target.connect(lambda t, r: order.append("target"))
+    controller.set_psu_enabled.connect(lambda on: order.append(f"psu {on}"))
+    room = controller.last_thermal.temperature_c
+
+    tab.sp_spin.setValue(controller.config.pid.ff_t_amb_c + 4.0)  # back to room temperature: heater stays off
+    tab.set_btn.click()
+    assert order == ["target"]
+    assert not tab.psu_btn.isChecked()
+
+    tab.sp_spin.setValue(room + 30.0)  # heating: target first, then PSU on
+    tab.set_btn.click()
+    assert order == ["target", "target", "psu True"]
+    assert tab.psu_btn.isChecked()
+    qtbot.waitUntil(lambda: controller.last_thermal.psu_on, timeout=3000)
+    # the ramp starts from the measured temperature, not from a stale program SP
+    assert controller.last_thermal.program_sp_c < room + 5.0
+
+    tab.sp_spin.setValue(room + 40.0)  # already on: no re-enable (that would reset the PID)
+    tab.set_btn.click()
+    assert order[-1] == "target" and order.count("psu True") == 1
+
+
+def test_set_leaves_psu_off_when_option_off(gui, qtbot):
+    window, controller, _ = gui
+    tab = window.temperature
+    tab.set_enables_psu = False
+    enabled = []
+    controller.set_psu_enabled.connect(enabled.append)
+    tab.sp_spin.setValue(controller.last_thermal.temperature_c + 30.0)
+    tab.set_btn.click()
+    assert enabled == [] and not tab.psu_btn.isChecked()
 
 
 def test_ramp_off_steps_setpoint_to_target(gui, qtbot):
@@ -209,8 +246,7 @@ def test_jog_tap_stopped_by_focus_loss(gui, qtbot):
 def test_safe_lock_blocks_jog(gui, qtbot):
     window, controller, _ = gui
     z = controller.devices.z
-    _key(window, QEvent.KeyPress, Qt.Key_F1)
-    _key(window, QEvent.KeyRelease, Qt.Key_F1)
+    window.manual.safe_lock_btn.click()
     assert window.manual.safe_lock_btn.isChecked()
     assert not window.manual.up_btn.isEnabled()
     start = z.position_um
@@ -220,13 +256,70 @@ def test_safe_lock_blocks_jog(gui, qtbot):
     assert z.position_um == pytest.approx(start)
     assert z.state is MotorState.IDLE
 
-    # unlock -> jog works again
-    _key(window, QEvent.KeyPress, Qt.Key_F1)
+    # unlock (on-screen button) -> jog works again
+    window.manual.safe_lock_btn.click()
     assert not window.manual.safe_lock_btn.isChecked()
     window.manual.up_btn.pressed.emit()
     qtbot.waitUntil(lambda: z.position_um > start + 20, timeout=3000)
     window.manual.up_btn.released.emit()
     qtbot.waitUntil(lambda: z.state is MotorState.IDLE, timeout=3000)
+
+
+def test_slow_approach_button_caps_jog_down(gui, qtbot):
+    window, controller, statuses = gui
+    btn = window.manual.slow_approach_btn
+    assert btn.text().endswith("Slow approach") and btn.isCheckable()
+    btn.click()
+    qtbot.waitUntil(lambda: statuses[-1].slow_approach, timeout=3000)
+    z = controller.devices.z
+    controller.set_speed.emit(500.0)
+    controller.move_z_to.emit(1000.0)  # up: not capped
+    qtbot.waitUntil(lambda: z.state is MotorState.IDLE and z.position_um > 999.0, timeout=5000)
+    assert z.velocity_um_s > 25.0
+    window.manual.down_btn.pressed.emit()
+    qtbot.waitUntil(lambda: z.state.is_busy, timeout=3000)
+    assert z.velocity_um_s <= 25.0
+    window.manual.down_btn.released.emit()
+    qtbot.waitUntil(lambda: z.state is MotorState.IDLE, timeout=3000)
+    btn.click()
+    qtbot.waitUntil(lambda: not statuses[-1].slow_approach, timeout=3000)
+
+
+def _tap(window, key):
+    _key(window, QEvent.KeyPress, key)
+    _key(window, QEvent.KeyRelease, key)
+
+
+def test_side_top_combo_toggles_safe_lock_once_per_press(gui):
+    """TourBox Console sends Ctrl+F1 for the Side + Top combo; Side alone sends Ctrl+F12."""
+    window, _, _ = gui
+    now = [100.0]
+    window.input_map._clock = lambda: now[0]
+    btn = window.manual.safe_lock_btn
+    # one combo press may send the key twice (button down + up, up to ~1.6 s apart): one toggle
+    _tap(window, Qt.Key_F1)
+    now[0] += 1.6
+    _tap(window, Qt.Key_F1)
+    assert btn.isChecked()
+    now[0] += 3.0
+    _tap(window, Qt.Key_F1)  # next combo press unlocks
+    assert not btn.isChecked()
+
+
+def test_side_alone_and_top_alone_never_toggle(gui):
+    window, _, _ = gui
+    now = [100.0]
+    window.input_map._clock = lambda: now[0]
+    btn = window.manual.safe_lock_btn
+    for locked in (False, True):
+        btn.setChecked(locked)
+        for key in (Qt.Key_F12, Qt.Key_F12, Qt.Key_F6):
+            now[0] += 3.0
+            _tap(window, key)
+            assert btn.isChecked() is locked
+    now[0] += 3.0
+    _tap(window, Qt.Key_F12)
+    assert "press Side + Top" in window.statusBar().currentMessage()
 
 
 def test_speed_keys_change_speed(gui, qtbot):
@@ -242,6 +335,85 @@ def test_speed_keys_change_speed(gui, qtbot):
     _key(window, QEvent.KeyPress, Qt.Key_F5)
     _key(window, QEvent.KeyPress, Qt.Key_F5)
     assert m.speed_index == 1
+
+
+def test_dial_stages_setpoint_and_c1_applies_once(gui, qtbot):
+    """Dial (Ctrl+F8/F9) only edits the setpoint box; C1 (Ctrl+F10) applies it, once per press."""
+    window, controller, _ = gui
+    tab = window.temperature
+    imap = window.input_map
+    now = [100.0]
+    imap._clock = lambda: now[0]
+    applied = []
+    controller.set_target.connect(lambda t, r: applied.append((t, r)))
+    tab.sp_spin.setValue(20.0)
+    tab.dial_step_c = 2.0
+
+    for _ in range(3):
+        _key(window, QEvent.KeyPress, Qt.Key_F8)
+    _key(window, QEvent.KeyPress, Qt.Key_F9)
+    assert tab.sp_spin.value() == pytest.approx(24.0)
+    assert applied == []  # nothing sent yet
+    assert tab.sp_spin.property("staged")
+
+    # C1: tap on button-down, another tap on button-up -> one Set
+    _key(window, QEvent.KeyPress, Qt.Key_F10)
+    _key(window, QEvent.KeyRelease, Qt.Key_F10)
+    now[0] += 0.3
+    _key(window, QEvent.KeyPress, Qt.Key_F10)
+    _key(window, QEvent.KeyRelease, Qt.Key_F10)
+    assert len(applied) == 1 and applied[0][0] == pytest.approx(24.0)
+    qtbot.waitUntil(lambda: not tab.sp_spin.property("staged"), timeout=3000)
+
+    # a later press applies again
+    now[0] += 2.0
+    _key(window, QEvent.KeyPress, Qt.Key_F10)
+    assert len(applied) == 2
+
+
+def test_c2_toggles_ramp_once_per_press(gui, qtbot):
+    window, controller, _ = gui
+    tab = window.temperature
+    imap = window.input_map
+    now = [100.0]
+    imap._clock = lambda: now[0]
+    assert tab.ramp_btn.isChecked()
+    # one C2 press = button-down tap + button-up tap -> one toggle
+    _key(window, QEvent.KeyPress, Qt.Key_F11)
+    _key(window, QEvent.KeyRelease, Qt.Key_F11)
+    now[0] += 0.3
+    _key(window, QEvent.KeyPress, Qt.Key_F11)
+    _key(window, QEvent.KeyRelease, Qt.Key_F11)
+    assert not tab.ramp_btn.isChecked() and tab.ramp_btn.text() == "Ramp: Off"
+    assert not tab.rate_spin.isEnabled()
+    now[0] += 2.0
+    _key(window, QEvent.KeyPress, Qt.Key_F11)
+    assert tab.ramp_btn.isChecked()
+
+
+def test_legend_lists_tourbox_controls_with_keys(gui):
+    window, _, _ = gui
+    text = window.legend_label.text()
+    for control in ("[Side] + [Top]", "[Knob]", "[Dial]", "[C1]", "[C2]", "[Tall]", "[Short]"):
+        assert control in text
+    assert "Ctrl+F8 / Ctrl+F9" in text and "Ctrl+F11" in text and "(Ctrl+F1)" in text
+
+
+def test_dial_clamps_to_temperature_limit(gui):
+    window, _, _ = gui
+    tab = window.temperature
+    tab.sp_spin.setValue(21.94)
+    _key(window, QEvent.KeyPress, Qt.Key_F8)
+    assert tab.sp_spin.value() == pytest.approx(22.0)  # snapped to the 1 °C grid
+    tab.sp_spin.setValue(21.94)
+    _key(window, QEvent.KeyPress, Qt.Key_F9)
+    assert tab.sp_spin.value() == pytest.approx(21.0)
+    tab.sp_spin.setValue(tab.t_max - 0.5)
+    _key(window, QEvent.KeyPress, Qt.Key_F8)
+    assert tab.sp_spin.value() == pytest.approx(tab.t_max)
+    tab.sp_spin.setValue(0.5)
+    _key(window, QEvent.KeyPress, Qt.Key_F9)
+    assert tab.sp_spin.value() == pytest.approx(0.0)
 
 
 def test_speed_settings_saved(gui, qtbot, tmp_path):
@@ -268,12 +440,12 @@ def test_presets_and_settings_save(gui, qtbot, tmp_path):
 
     st = window.settings
     assert st.t_max.maximum() == 300.0 and st.v_max.maximum() == 24.0
-    st.key_edits["cancel_motion"].setKeySequence(parse_shortcut("Ctrl+F9"))
+    st.key_edits["cancel_motion"].setKeySequence(parse_shortcut("Ctrl+Shift+F6"))
     assert st.save()
     on_disk = load_config(tmp_path / "config.yaml")
-    assert on_disk.keys["cancel_motion"] == "Ctrl+F9"
+    assert on_disk.keys["cancel_motion"] == "Ctrl+Shift+F6"
     assert on_disk.presets  # presets survive a settings save
-    assert window.input_map._combos[parse_shortcut("Ctrl+F9")] == "cancel_motion"
+    assert window.input_map._combos[parse_shortcut("Ctrl+Shift+F6")] == "cancel_motion"
 
 
 def test_mark_and_action_log(gui, qtbot, caplog):
@@ -383,3 +555,35 @@ def test_idle_alarm_answered_keeps_heater_on(gui, qtbot):
     window.idle_dialog.here_btn.click()
     assert not window.idle_dialog.isVisible()
     assert controller.last_thermal.psu_on
+
+
+def test_set_does_not_enable_psu_while_tripped(gui, qtbot):
+    import dataclasses
+
+    from transferstage.control.safety import Alarm, AlarmCode, Severity
+
+    window, controller, _ = gui
+    tab = window.temperature
+    enabled, msgs = [], []
+    controller.set_psu_enabled.connect(enabled.append)
+    tab.message.connect(msgs.append)
+    trip = Alarm(AlarmCode.OVER_TEMP, Severity.TRIP, "over temperature", active=False)
+    tab._last = dataclasses.replace(controller.last_thermal, psu_on=False, alarms=(trip,))
+    tab.sp_spin.setValue(tab._last.temperature_c + 30.0)
+    tab.apply_setpoint()
+    assert enabled == []
+    assert "PSU stays off" in msgs[-1]
+
+
+def test_set_switches_psu_on_for_a_cool_down_above_ambient(gui, qtbot):
+    """Ramping down from 150 to 100 °C needs heater power; Set must not leave the PSU off."""
+    import dataclasses
+
+    window, controller, _ = gui
+    tab = window.temperature
+    enabled = []
+    controller.set_psu_enabled.connect(enabled.append)
+    tab._last = dataclasses.replace(controller.last_thermal, temperature_c=150.0, program_sp_c=150.0, psu_on=False)
+    tab.sp_spin.setValue(100.0)
+    tab.apply_setpoint()
+    assert enabled == [True]

@@ -78,8 +78,14 @@ Use the TourBox with the **TransferStageControl** preset active in TourBox Conso
 | 3.3 | Knob clockwise | `Ctrl+F4` | Speed Knob moves one position; Set Speed shows the new speed | ☐ |
 | 3.4 | Knob counter-clockwise | `Ctrl+F5` | Speed decreases | ☐ |
 | 3.5 | Top | `Ctrl+F6` | Cancel Motion | ☐ |
-| 3.6 | Side / Side + Top | `Ctrl+F1` | Toggles Safe Lock | ☐ |
+| 3.6 | Side + Top pressed together | `Ctrl+F1` | Safe Lock turns on and stays on after both are released | ☐ |
+| 3.6a | Side + Top together again | `Ctrl+F1` | Safe Lock turns off | ☐ |
+| 3.6b | Side alone, then Top alone | `Ctrl+F12`, `Ctrl+F6` | Safe Lock unchanged; Side shows "press Side + Top" in the status bar | ☐ |
 | 3.7 | Hold Tall, then click another window (Alt+Tab) | | Jog stops when the app loses focus | ☐ |
+| 3.8 | Dial clockwise, a few clicks | `Ctrl+F8` | Setpoint box rises one step per click and turns amber; target SP unchanged | ☐ |
+| 3.9 | Dial counter-clockwise | `Ctrl+F9` | Setpoint box falls one step per click | ☐ |
+| 3.10 | C1 | `Ctrl+F10` | Setpoint applied once (one "set temperature" line in the log); box no longer amber | ☐ |
+| 3.11 | C2 | `Ctrl+F11` | Ramp button flips once per press (On ↔ Off) | ☐ |
 
 ## 4. Rotator (Sample Rotator)
 
@@ -105,6 +111,9 @@ Use moderate temperatures (≤ 100 °C) for this section.
 | 5.7 | Set point 50 °C, ramp **0** | Program SP steps straight to 50 °C (no ramp) | ☐ |
 | 5.8 | **Reinitialize PID** while holding | Integral cleared; no large output jump beyond the P term | ☐ |
 | 5.9 | **PSU Off** | Output off on the front panel, V cmd 0; T starts falling | ☐ |
+| 5.9a | With the PSU off, set point 50 °C, **Set** | PSU output switches **on** by itself; program SP ramps from the measured T (no jump) | ☐ |
+| 5.9b | At ~50 °C: **PSU Off**, then set point 40 °C, ramp 2 °C/min, **Set** | PSU switches **on**; T follows the ramp down and holds 40 °C | ☐ |
+| 5.9c | **PSU Off**, then set point 25 °C (room temperature), **Set** | PSU stays **off** | ☐ |
 | 5.10 | Charts: T/target/program SP and PSU voltage | All traces plot live; **Pause** freezes the view for zooming; un-pause resumes | ☐ |
 | 5.11 | Profile: 3 segments (e.g. 50 °C @ 10/min hold 2 min → 70 °C @ 5/min hold 2 min → 40 °C @ 10/min hold 0) and run | Segments run in order; the current segment is shown; **Stop** ends the profile | ☐ |
 | 5.12 | (optional) **Autotune** around 60 °C with a small amplitude (e.g. ±2 V) | Oscillation, then a gains table; Cancel aborts with PSU still controlled | ☐ |

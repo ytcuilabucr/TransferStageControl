@@ -21,6 +21,11 @@ Z soft limits (``limits.z_min_um``/``z_max_um``): ``move_z_to`` refuses targets
 outside them, and a jog is executed as a move to the soft limit in the jog
 direction, so it stops exactly at the limit even between polls. Homing goes to
 the hardware home position regardless of the soft limits.
+
+Slow approach: while on, every downward Z motion (jog down, a move to a lower
+position) runs at no more than :data:`SLOW_APPROACH_UM_S`; the requested speed is
+restored for upward motion and when it is turned off. Homing Z is refused while
+it is on (homing runs at the controller's own homing speed).
 """
 
 from __future__ import annotations
@@ -40,6 +45,10 @@ log = logging.getLogger(__name__)
 
 Clock = Callable[[], float]
 
+SLOW_APPROACH_UM_S = 25.0  # max downward Z speed while slow approach is on
+ROTATOR_MIN_DEG = -90.0  # allowed rotate-to range; the driver wraps negatives into 0-360
+ROTATOR_MAX_DEG = 90.0
+
 
 @dataclass(frozen=True)
 class MotionStatus:
@@ -51,6 +60,7 @@ class MotionStatus:
     seconds_since_last_motion: float
     safe_lock: bool
     jog_direction: int = 0  # +1 up, -1 down, 0 not jogging
+    slow_approach: bool = False
 
     @property
     def busy(self) -> bool:
@@ -82,6 +92,9 @@ class MotionWorker(QObject):
         self._timer: QTimer | None = None
         self._safe_lock = False
         self._jog_dir = 0
+        self._move_target: float | None = None  # target of the last move_z_to, while it runs
+        self._slow_approach = False
+        self._speed_um_s: float | None = None  # speed the user asked for (before the slow-approach cap)
         self._last_motion = clock()
         self._poll_error: str | None = None
 
@@ -111,6 +124,39 @@ class MotionWorker(QObject):
     @property
     def safe_lock(self) -> bool:
         return self._safe_lock
+
+    @property
+    def slow_approach(self) -> bool:
+        return self._slow_approach
+
+    def _apply_speed(self, down: bool) -> bool:
+        """Set the Z velocity for a move in direction ``down``: the requested speed, capped
+        at SLOW_APPROACH_UM_S for downward motion while slow approach is on."""
+        try:
+            current = float(self.z.velocity_um_s)
+        except Exception as exc:  # noqa: BLE001
+            log.error("motion: read Z speed failed: %s", exc)
+            self.error.emit(f"read Z speed failed: {exc}")
+            return False
+        if self._speed_um_s is None:
+            self._speed_um_s = current
+        want = self._speed_um_s
+        if down and self._slow_approach:
+            want = min(want, SLOW_APPROACH_UM_S)
+        if abs(want - current) < 1e-9:
+            return True
+        return self._call("set speed", self.z.set_velocity, want)
+
+    def _moving_down(self) -> bool:
+        """True while a downward jog or a move to a lower position is running."""
+        if self._jog_dir:
+            return self._jog_dir < 0
+        if self._move_target is None:
+            return False
+        try:
+            return self._move_target < self.z.position_um
+        except Exception:  # noqa: BLE001
+            return True
 
     def _call(self, what: str, fn: Callable, *args) -> bool:
         try:
@@ -150,7 +196,10 @@ class MotionWorker(QObject):
             log.info("motion: jog %s refused at %g µm: soft limit %g µm", d.name.lower(), pos, target)
             self.refused.emit(f"jog {d.name.lower()}: at Z soft limit ({target:g} µm)")
             return
+        if not self._apply_speed(d is Direction.DOWN):
+            return
         if self._call("jog", self.z.move_to, target):
+            self._move_target = None
             log.info("motion: jog %s from %g µm toward %g µm", d.name.lower(), pos, target)
             self._jog_dir = int(d)
             self._last_motion = self._clock()
@@ -171,7 +220,15 @@ class MotionWorker(QObject):
             )
             return
         self._jog_dir = 0
-        if self._call("move Z", self.z.move_to, float(um)):
+        um = float(um)
+        try:
+            down = um < self.z.position_um
+        except Exception:  # noqa: BLE001 - position unknown: assume the worst
+            down = True
+        if not self._apply_speed(down):
+            return
+        if self._call("move Z", self.z.move_to, um):
+            self._move_target = um
             self._last_motion = self._clock()
 
     @pyqtSlot(float)
@@ -187,10 +244,35 @@ class MotionWorker(QObject):
         except Exception as exc:  # noqa: BLE001
             self.error.emit(f"set speed failed: {exc}")
             return
-        if self._call("set speed", self.z.set_velocity, um_s) and self._jog_dir:
+        self._speed_um_s = um_s
+        if self._apply_speed(self._moving_down()) and self._jog_dir:
             # Re-issue the jog so the new speed takes effect immediately.
             target = self.safety.z_max_um if self._jog_dir > 0 else self.safety.z_min_um
             self._call("jog", self.z.move_to, target)
+
+    @pyqtSlot(bool)
+    def set_slow_approach(self, on: bool) -> None:
+        """Cap downward Z speed at SLOW_APPROACH_UM_S. Always allowed (it only ever slows Z down);
+        a downward jog or move already running is re-issued at the capped speed."""
+        self._slow_approach = bool(on)
+        log.info("motion: slow approach %s", "on" if on else "off")
+        try:
+            busy = self.z.state.is_busy
+            pos = self.z.position_um
+        except Exception as exc:  # noqa: BLE001
+            log.error("motion: slow approach: read Z failed: %s", exc)
+            self.error.emit(f"slow approach: read Z failed: {exc}")
+            busy, pos = False, None
+        if busy and self._jog_dir:
+            target = self.safety.z_max_um if self._jog_dir > 0 else self.safety.z_min_um
+            if self._apply_speed(self._jog_dir < 0):
+                self._call("jog", self.z.move_to, target)
+        elif busy and self._move_target is not None and pos is not None:
+            if self._apply_speed(self._move_target < pos):
+                self._call("move Z", self.z.move_to, self._move_target)
+        else:
+            self._apply_speed(False)  # idle: put the requested speed back on the controller
+        self.poll()
 
     @pyqtSlot()
     def cancel_motion(self) -> None:
@@ -207,6 +289,9 @@ class MotionWorker(QObject):
         if not math.isfinite(deg):
             self.refused.emit(f"rotate: {deg!r} is not a finite angle")
             return
+        if not ROTATOR_MIN_DEG <= deg <= ROTATOR_MAX_DEG:
+            self.refused.emit(f"rotate: {deg:g}° is outside {ROTATOR_MIN_DEG:g}..{ROTATOR_MAX_DEG:g}°")
+            return
         if self._call("rotate", self.rotator.move_to, deg):
             self._last_motion = self._clock()
 
@@ -214,7 +299,11 @@ class MotionWorker(QObject):
     def home_z(self) -> None:
         if self._locked("home Z"):
             return
+        if self._slow_approach:
+            self.refused.emit("home Z: slow approach is on (homing runs at the controller's homing speed)")
+            return
         self._jog_dir = 0
+        self._move_target = None
         if self._call("home Z", self.z.home):
             self._last_motion = self._clock()
 
@@ -305,8 +394,9 @@ class MotionWorker(QObject):
         now = self._clock()
         if z_state.is_busy or r_state.is_busy:
             self._last_motion = now
-        if self._jog_dir and not z_state.is_busy:
+        if not z_state.is_busy:
             self._jog_dir = 0  # jog ended at the soft limit (or was stopped elsewhere)
+            self._move_target = None
 
         msg = "; ".join(errors) or None
         if msg != self._poll_error:
@@ -325,5 +415,6 @@ class MotionWorker(QObject):
                 seconds_since_last_motion=max(now - self._last_motion, 0.0),
                 safe_lock=self._safe_lock,
                 jog_direction=self._jog_dir,
+                slow_approach=self._slow_approach,
             )
         )

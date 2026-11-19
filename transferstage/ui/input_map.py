@@ -5,14 +5,22 @@ Actions and default keys (``keys:`` in config.yaml; they match the TourBox Conso
 ==============  ===================  =======================================================
 action          TourBox control      default key
 ==============  ===================  =======================================================
-safe_lock       Side (+ Top)         Ctrl+F1         toggle Safe Lock
+safe_lock       Side + Top           Ctrl+F1         toggle Safe Lock (a TourBox Console combo)
+side_alone      Side                 Ctrl+F12        no action; status bar hint "press Side + Top"
 cancel_motion   Top                  Ctrl+F6         stop Z and rotator immediately
 speed_up        Knob clockwise       Ctrl+F4         Speed Knob +1 position (motion.speed_steps_um_s)
 speed_down      Knob counter-cw      Ctrl+F5         Speed Knob −1 position
 jog_up          Tall (hold)          Ctrl+F2         jog Z up while held
 jog_down        Short (hold)         Ctrl+F3         jog Z down while held
 mark            (unassigned)         Ctrl+F7         write an event mark to the session CSV
+setpoint_up     Dial clockwise       Ctrl+F8         stage the temperature setpoint +1 step
+setpoint_down   Dial counter-cw      Ctrl+F9         stage the temperature setpoint −1 step
+setpoint_set    C1                   Ctrl+F10        apply the staged setpoint (like ✔ Set)
+ramp_toggle     C2                   Ctrl+F11        toggle Ramp: On / Off (Temperature Control)
 ==============  ===================  =======================================================
+
+The Dial only changes the number in the setpoint box (the step is
+``ramp.dial_step_c``); nothing reaches the heater until ``setpoint_set``.
 
 These defaults match the "TransferStageControl" preset in TourBox Console
 (the keys the LabVIEW program used). Ctrl+F keys do not collide with typing in
@@ -48,10 +56,26 @@ from PyQt5.QtWidgets import QApplication, QKeySequenceEdit
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("safe_lock", "cancel_motion", "speed_up", "speed_down", "jog_up", "jog_down", "mark")
+ACTIONS = (
+    "safe_lock",
+    "cancel_motion",
+    "speed_up",
+    "speed_down",
+    "jog_up",
+    "jog_down",
+    "mark",
+    "setpoint_up",
+    "setpoint_down",
+    "setpoint_set",
+    "ramp_toggle",
+    "side_alone",
+)
 JOG_ACTIONS = {"jog_up": 1, "jog_down": -1}
-REPEATABLE = {"speed_up", "speed_down"}  # knob turns may arrive as auto-repeat
+REPEATABLE = {"speed_up", "speed_down", "setpoint_up", "setpoint_down"}  # knob/dial turns may auto-repeat
 TAP_MS = 40.0  # a jog key released sooner than this was a TourBox tap, not a held key
+# One TourBox button press sends two taps (button down + button up). These actions
+# fire on the first tap only; a second press within this window is ignored.
+DEBOUNCE_S = {"safe_lock": 2.0, "setpoint_set": 1.5, "ramp_toggle": 1.5, "side_alone": 2.0}
 
 _MOD_MASK = int(Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)
 
@@ -72,7 +96,7 @@ def event_combo(ev: QKeyEvent) -> int:
 
 
 class InputMap(QObject):
-    action = pyqtSignal(str)  # safe_lock, cancel_motion, speed_up, speed_down, mark
+    action = pyqtSignal(str)  # every action in ACTIONS except jog_up / jog_down
     jog_start = pyqtSignal(int)
     jog_stop = pyqtSignal()
 
@@ -82,6 +106,7 @@ class InputMap(QObject):
         self._jog_key: int | None = None
         self._jog_t0 = 0.0
         self._tap_jog = False  # jog started by a TourBox tap; the next tap of the same key stops it
+        self._last_fired: dict[str, float] = {}  # DEBOUNCE_S action -> time it last fired
         self._clock = time.monotonic
         self.set_bindings(bindings)
 
@@ -169,5 +194,15 @@ class InputMap(QObject):
             log.info("input map: jog key %s pressed (%s)", QKeySequence(event_combo(ev)).toString(), action)
             self.jog_start.emit(JOG_ACTIONS[action])
         else:
+            if action not in REPEATABLE:
+                log.info("input map: key %s -> %s", QKeySequence(event_combo(ev)).toString(), action)
+            window = DEBOUNCE_S.get(action)
+            if window is not None:
+                now = self._clock()
+                last = self._last_fired.get(action)
+                if last is not None and now - last < window:
+                    log.info("input map: %s again after %.0f ms; ignored (button-up tap)", action, (now - last) * 1000)
+                    return True
+                self._last_fired[action] = now
             self.action.emit(action)
         return True

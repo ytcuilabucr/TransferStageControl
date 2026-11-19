@@ -1,0 +1,10 @@
+# HT15W limit test, Phase A: up to the rated 260 °C. See docs/heater_limit_test.md.
+# Set limits.t_max_c = 275 in the Config tab before starting.
+name: limit_test_A_260C
+segments:
+  - {ramp_to: 120, rate_deg_min: 10, hold_min: 10}   # dry-out (spec: 120 °C before full power)
+  - {ramp_to: 200, rate_deg_min: 10, hold_min: 10}
+  - {ramp_to: 230, rate_deg_min: 5,  hold_min: 10}
+  - {ramp_to: 250, rate_deg_min: 3,  hold_min: 10}
+  - {ramp_to: 260, rate_deg_min: 2,  hold_min: 20}
+  - {ramp_to: 25,  rate_deg_min: 0,  hold_min: 0}    # step: heater off, passive cool-down

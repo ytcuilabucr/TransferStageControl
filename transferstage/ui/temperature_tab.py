@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections import deque
 
@@ -50,6 +51,9 @@ from .widgets import AMBER, GREEN, LED_GREEN_OFF, RED, Led, fmt, indicator, sect
 log = logging.getLogger(__name__)
 
 MAX_POINTS = 200_000  # history kept for the charts (~28 h at 2 Hz)
+# Set switches the PSU on for any set point this far above ambient (pid.ff_t_amb_c): holding or
+# ramping down above room temperature needs heater power, or the stage cools uncontrolled.
+SET_PSU_MARGIN_C = 5.0
 PV_COLOR = "#1f77d4"
 SP_COLOR = "#e0303a"
 
@@ -71,6 +75,8 @@ class TemperaturePanel(QObject):
         self.t_max = min(cfg.limits.t_max_c, HARD_T_MAX_C)
         self._last: ThermalSample | None = None
         self._last_rate = cfg.ramp.default_rate_deg_min
+        self.dial_step_c = cfg.ramp.dial_step_c  # TourBox Dial: setpoint change per click
+        self.set_enables_psu = cfg.ramp.set_enables_psu  # Set also switches the PSU on when heating
         self._t: deque[float] = deque(maxlen=MAX_POINTS)
         self._temp: deque[float] = deque(maxlen=MAX_POINTS)
         self._target: deque[float] = deque(maxlen=MAX_POINTS)
@@ -115,7 +121,8 @@ class TemperaturePanel(QObject):
         self.rate_spin = spin(0, 1000, self._last_rate, decimals=2, step=1)
         self.rate_spin.setToolTip("°C/min; 0 = step change")
         self.sp_spin = spin(0, self.t_max, 20.0, decimals=2, step=1)
-        self.sp_spin.setToolTip("°C")
+        self.sp_spin.setToolTip("°C\nAmber: differs from the running setpoint; press Set (TourBox C1) to apply.")
+        self.sp_spin.valueChanged.connect(self._update_staged)
         self.ramp_btn = QPushButton()
         self.ramp_btn.setCheckable(True)
         self.ramp_btn.setToolTip(
@@ -396,11 +403,53 @@ class TemperaturePanel(QObject):
     def apply_setpoint(self) -> None:
         sp = float(self.sp_spin.value())
         self._last_rate = float(self.rate_spin.value()) if self.ramp_btn.isChecked() else 0.0
+        # Target first: with the PSU still off, the new ramp starts from the measured temperature.
         self.c.set_target.emit(sp, self._last_rate)
-        if self._last_rate > 0:
-            self.message.emit(f"Set point {sp:g} °C, ramping at {self._last_rate:g} °C/min")
-        else:
-            self.message.emit(f"Set point {sp:g} °C (step, no ramp)")
+        psu = self._psu_on_for_set(sp)
+        msg = f"Set point {sp:g} °C, " + (f"ramping at {self._last_rate:g} °C/min" if self._last_rate > 0 else "step, no ramp")
+        self.message.emit(msg + psu)
+
+    def _psu_on_for_set(self, sp: float) -> str:
+        """Switch the PSU on for a set point above ambient (ramp.set_enables_psu). Returns a status suffix.
+
+        Not only when heating: a controlled cool-down or a hold above room temperature needs
+        heater power too (natural cooling, (T - T_amb)/tau, outruns the ramp at high T).
+        """
+        s = self._last
+        if not self.set_enables_psu or s is None or s.psu_on:
+            return ""  # already on: re-enabling would reset the PID and dip to 0 V
+        if sp <= self.c.config.pid.ff_t_amb_c + SET_PSU_MARGIN_C:
+            return ""  # back to room temperature: the PID would output ~0 V anyway
+        if s.tripped:
+            return "; PSU stays off (safety trip latched, acknowledge first)"
+        if s.mode == "autotune":
+            return ""
+        self.c.set_psu_enabled.emit(True)
+        self._set_psu_button(True)
+        return "; PSU output on"
+
+    def nudge_setpoint(self, direction: int) -> None:
+        """TourBox Dial: change the setpoint box by one step. Nothing is sent until Set."""
+        step = self.dial_step_c
+        n = self.sp_spin.value() / step
+        # snap to the step grid: 21.94 -> 22 (up) or 21 (down) with a 1 °C step
+        sp = (math.floor(n + 1e-6) + 1) * step if direction > 0 else (math.ceil(n - 1e-6) - 1) * step
+        self.sp_spin.setValue(min(max(sp, self.sp_spin.minimum()), self.sp_spin.maximum()))
+        self.message.emit(f"Setpoint {self.sp_spin.value():g} °C staged; press Set (C1) to apply")
+
+    def _update_staged(self) -> None:
+        """Amber setpoint box while it differs from the running target (not yet Set)."""
+        s = self._last
+        staged = s is not None and abs(self.sp_spin.value() - s.target_sp_c) > 0.005
+        if staged != self.sp_spin.property("staged"):
+            self.sp_spin.setProperty("staged", staged)
+            self.sp_spin.setStyleSheet(f"QDoubleSpinBox {{ background:{AMBER}; }}" if staged else "")
+
+    def toggle_ramp(self) -> None:
+        """TourBox C2: flip Ramp On/Off (takes effect on the next Set)."""
+        self.ramp_btn.toggle()
+        on = self.ramp_btn.isChecked()
+        self.message.emit(f"Ramp {'on' if on else 'off'} for the next Set" + (f" ({self.rate_spin.value():g} °C/min)" if on else " (step)"))
 
     def _on_ramp_toggled(self, on: bool) -> None:
         self.ramp_btn.setText("Ramp: On" if on else "Ramp: Off")
@@ -566,6 +615,8 @@ class TemperaturePanel(QObject):
     # ------------------------------------------------------------------ samples
 
     def on_sample(self, s: ThermalSample) -> None:
+        if self._last is None:  # first sample: start the setpoint box at the running setpoint (not staged)
+            self.sp_spin.setValue(min(max(s.target_sp_c, self.sp_spin.minimum()), self.sp_spin.maximum()))
         self._last = s
         self.ro["T"].setText(fmt(s.temperature_c, 2, "°C"))
         self.ro["target"].setText(fmt(s.target_sp_c, 2, "°C"))
@@ -577,6 +628,7 @@ class TemperaturePanel(QObject):
         self.pv_left.setText(fmt(s.temperature_c, 2, "°C"))
         self.sp_label.setText(fmt(s.program_sp_c, 2))
         self.rc_og.setText(fmt(s.target_sp_c, 2))
+        self._update_staged()
         self.rc_rate.setText(fmt(self._last_rate, 2))
         self.rc_sp.setText(fmt(s.program_sp_c, 2))
         self.ascending_led.set_on(s.target_sp_c >= s.program_sp_c)

@@ -39,13 +39,18 @@ from .widgets import spin
 log = logging.getLogger(__name__)
 
 KEY_HINTS = {
-    "safe_lock": "TourBox Side + Top",
+    "safe_lock": "TourBox Side + Top combo (toggle Safe Lock)",
     "cancel_motion": "TourBox Top",
     "speed_up": "TourBox Knob clockwise",
     "speed_down": "TourBox Knob counter-clockwise",
     "jog_up": "TourBox Tall (hold)",
     "jog_down": "TourBox Short (hold)",
     "mark": "Event mark in the session CSV (any free TourBox button)",
+    "setpoint_up": "TourBox Dial clockwise (setpoint +1 step, not applied)",
+    "setpoint_down": "TourBox Dial counter-clockwise (setpoint −1 step)",
+    "setpoint_set": "TourBox C1 (apply the setpoint, like ✔ Set)",
+    "ramp_toggle": "TourBox C2 (Ramp: On / Off)",
+    "side_alone": "TourBox Side alone (no action; reminds you to press Side + Top)",
 }
 
 
@@ -82,7 +87,7 @@ class SettingsTab(QWidget):
 
         bar = QHBoxLayout()
         bar.addWidget(
-            QLabel("Key bindings apply on Save. Device, simulate, PID, limit and logging changes take effect on restart.")
+            QLabel("Key bindings and the Dial step apply on Save. Device, simulate, PID, limit and logging changes take effect on restart.")
         )
         bar.addStretch(1)
         self.revert_btn = QPushButton("Revert")
@@ -133,6 +138,14 @@ class SettingsTab(QWidget):
         self.out_lo = spin(0, HARD_V_MAX, 0, decimals=2, step=0.5, suffix=" V")
         self.out_hi = spin(0, HARD_V_MAX, 0, decimals=2, step=0.5, suffix=" V")
         self.rate = spin(0, 1000, 0, decimals=1, step=1, suffix=" °C/min")
+        self.dial_step = spin(0.01, 100, 1, decimals=2, step=0.5, suffix=" °C")
+        self.dial_step.setToolTip("Setpoint change per TourBox Dial click (applies on Save)")
+        self.set_enables_psu = QCheckBox("Set switches the PSU output on")
+        self.set_enables_psu.setToolTip(
+            "Set (TourBox C1) also turns the PSU output on when the new set point is more than 5 °C\n"
+            "above the feedforward T_amb, also when ramping down (a controlled cool-down needs heater power).\n"
+            "Never while a safety trip is latched. (applies on Save)"
+        )
         self.ff_k = spin(0, 1000, 0, decimals=4, step=0.05, suffix=" °C/V²")
         self.ff_k.setSpecialValueText("Off")
         self.ff_k.setToolTip("Feedforward heater model T - T_amb = k·V² (0 = no feedforward)")
@@ -147,6 +160,8 @@ class SettingsTab(QWidget):
         f.addRow("Output low:", self.out_lo)
         f.addRow("Output high:", self.out_hi)
         f.addRow("Default ramp rate:", self.rate)
+        f.addRow("Dial setpoint step:", self.dial_step)
+        f.addRow("", self.set_enables_psu)
         f.addRow("Feedforward k:", self.ff_k)
         f.addRow("Feedforward T_amb:", self.ff_tamb)
         f.addRow("Feedforward tau:", self.ff_tau)
@@ -224,6 +239,8 @@ class SettingsTab(QWidget):
         self.ff_tamb.setValue(p.ff_t_amb_c)
         self.ff_tau.setValue(p.ff_tau_s)
         self.rate.setValue(cfg.ramp.default_rate_deg_min)
+        self.dial_step.setValue(cfg.ramp.dial_step_c)
+        self.set_enables_psu.setChecked(cfg.ramp.set_enables_psu)
         self.t_max.setValue(lim.t_max_c)
         self.i_max.setValue(lim.i_max)
         self.z_min.setValue(lim.z_min_um)
@@ -264,7 +281,11 @@ class SettingsTab(QWidget):
                 "ff_t_amb_c": self.ff_tamb.value(),
                 "ff_tau_s": self.ff_tau.value(),
             },
-            "ramp": {"default_rate_deg_min": self.rate.value()},
+            "ramp": {
+                "default_rate_deg_min": self.rate.value(),
+                "dial_step_c": self.dial_step.value(),
+                "set_enables_psu": self.set_enables_psu.isChecked(),
+            },
             "motion": dataclasses.asdict(base.motion),
             "limits": {
                 "t_max_c": min(self.t_max.value(), HARD_T_MAX_C),

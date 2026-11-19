@@ -391,6 +391,18 @@ class _KinesisAxis:
 # --------------------------------------------------------------------------- public classes
 
 
+def wrap_deg(deg: float) -> float:
+    """Map any angle to the controller's [0, 360) range (-30 -> 330)."""
+    w = float(deg) % 360.0
+    return 0.0 if w >= 360.0 else w  # guard -1e-17 % 360 == 360.0
+
+
+def signed_deg(deg: float) -> float:
+    """Map a [0, 360) controller angle to (-180, 180] (330 -> -30)."""
+    w = wrap_deg(deg)
+    return w - 360.0 if w > 180.0 else w
+
+
 class KinesisZStage(_KinesisAxis, LinearStage):
     """KCube DC Servo Z stage; µm and µm/s."""
 
@@ -439,7 +451,12 @@ class KinesisZStage(_KinesisAxis, LinearStage):
 
 
 class KinesisRotator(_KinesisAxis, RotaryStage):
-    """Integrated Stepper cage rotator; degrees and deg/s (continuous rotation, no travel check)."""
+    """Integrated Stepper cage rotator; degrees and deg/s (continuous rotation, no travel check).
+
+    The controller only accepts absolute targets in [0, 360), so ``move_to`` wraps the
+    requested angle (e.g. -30° is sent as 330°). ``angle_deg`` reports the signed angle
+    in (-180, 180] so a -30° move reads back as -30°.
+    """
 
     scale = 1.0
     unit = "°"
@@ -456,7 +473,7 @@ class KinesisRotator(_KinesisAxis, RotaryStage):
     @property
     def angle_deg(self) -> float:
         with self._lock:
-            return self._position()
+            return signed_deg(self._position())
 
     @property
     def state(self) -> MotorState:
@@ -476,7 +493,7 @@ class KinesisRotator(_KinesisAxis, RotaryStage):
         self._set_velocity(deg_s)
 
     def move_to(self, deg: float, wait: bool = False, timeout_s: float | None = None) -> None:
-        self._move_to(deg, wait, timeout_s)
+        self._move_to(wrap_deg(deg), wait, timeout_s)
 
     def jog(self, direction: Direction, velocity_deg_s: float | None = None) -> None:
         self._jog(direction, velocity_deg_s)

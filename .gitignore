@@ -9,3 +9,6 @@ dist/
 
 # Vendor binaries in the LabVIEW reference project (DLLs, .exe, .chm, drivers)
 reference/**/Libs/
+
+# IDE
+.idea/

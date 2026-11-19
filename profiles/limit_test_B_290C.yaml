@@ -1,0 +1,8 @@
+# HT15W limit test, Phase B: short excursion to 290 °C (ABOVE the 260 °C rating).
+# Only after Phase A passes. Set limits.t_max_c = 300 in the Config tab before starting.
+# Time above 260 °C: ~2 min ramp + 1 min hold + ~35 s cool-down. See docs/heater_limit_test.md.
+name: limit_test_B_290C
+segments:
+  - {ramp_to: 250, rate_deg_min: 10, hold_min: 5}    # go/no-go check below spec
+  - {ramp_to: 290, rate_deg_min: 15, hold_min: 1}    # set hold_min: 0 to only touch 290 °C
+  - {ramp_to: 25,  rate_deg_min: 0,  hold_min: 0}    # step: heater off immediately

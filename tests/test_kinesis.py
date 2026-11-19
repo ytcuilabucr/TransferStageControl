@@ -200,11 +200,22 @@ def test_rotator_degrees_no_travel_check():
     r.connect()
     dev = api.devices[0]
     r.move_to(400.0)
-    assert ("MoveTo", (400.0, 0)) in dev.calls
+    assert ("MoveTo", (40.0, 0)) in dev.calls
+    r.move_to(-30.0)
+    assert ("MoveTo", (330.0, 0)) in dev.calls
+
     assert r.velocity_deg_s == 10.0
     r.home()
     assert dev.calls[-1] == ("Home", (0,))
     assert r.state is MotorState.HOMING
+
+
+def test_rotator_angle_helpers():
+    from transferstage.drivers.kinesis import signed_deg, wrap_deg
+
+    assert wrap_deg(-30.0) == 330.0 and wrap_deg(-90.0) == 270.0 and wrap_deg(90.0) == 90.0
+    assert wrap_deg(360.0) == 0.0 and wrap_deg(-1e-17) == 0.0
+    assert signed_deg(330.0) == -30.0 and signed_deg(270.0) == -90.0 and signed_deg(180.0) == 180.0
 
 
 def test_build_devices_uses_kinesis():

@@ -43,6 +43,7 @@ class AppController(QObject):
     home_z = pyqtSignal()
     home_rotator = pyqtSignal()
     set_safe_lock = pyqtSignal(bool)
+    set_slow_approach = pyqtSignal(bool)  # cap downward Z speed at 25 µm/s
     check_connection = pyqtSignal()  # test both stages, reconnect the ones that dropped
     # thermal commands -> ThermalWorker slots
     set_target = pyqtSignal(float, float)
@@ -92,6 +93,7 @@ class AppController(QObject):
             (self.home_z, m.home_z),
             (self.home_rotator, m.home_rotator),
             (self.set_safe_lock, m.set_safe_lock),
+            (self.set_slow_approach, m.set_slow_approach),
             (self.check_connection, m.check_connection),
             (self.set_target, t.set_target),
             (self.set_psu_enabled, t.set_psu_enabled),
@@ -125,6 +127,7 @@ class AppController(QObject):
         on(self.home_z, lambda: "home Z")
         on(self.home_rotator, lambda: "home rotator")
         on(self.set_safe_lock, lambda b: f"safe lock {'on' if b else 'off'}")
+        on(self.set_slow_approach, lambda b: f"slow approach {'on' if b else 'off'}")
         on(self.check_connection, lambda: "check stage connection")
         on(self.set_target, lambda t, r: f"set temperature {t:g} °C at {r:g} °C/min" if r > 0 else f"set temperature {t:g} °C (step)")
         on(self.set_psu_enabled, lambda b: f"PSU output {'on' if b else 'off'}")

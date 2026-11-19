@@ -103,3 +103,14 @@ def test_setup_logging_writes_file(tmp_path):
     setup_logging(tmp_path / "logs")
     tagged = [h for h in logging.getLogger().handlers if getattr(h, "_transferstage_handler", False)]
     assert len(tagged) == 2
+
+
+def test_dial_step_and_setpoint_keys():
+    cfg = config_from_dict({"keys": {"mark": "Ctrl+F7"}})  # older config.yaml without the new keys
+    assert cfg.ramp.dial_step_c == 1.0
+    assert cfg.ramp.set_enables_psu is True
+    with pytest.raises(ConfigError, match="set_enables_psu"):
+        config_from_dict({"ramp": {"set_enables_psu": "yes"}})
+    assert cfg.keys["setpoint_set"] == "Ctrl+F10"
+    with pytest.raises(ConfigError, match="dial_step_c"):
+        config_from_dict({"ramp": {"dial_step_c": 0}})

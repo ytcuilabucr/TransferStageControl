@@ -33,7 +33,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ..app import AppController
-from ..control.motion import MotionStatus
+from ..control.motion import ROTATOR_MAX_DEG, ROTATOR_MIN_DEG, SLOW_APPROACH_UM_S, MotionStatus
 from ..drivers.base import MotorState
 from .widgets import AMBER, GREEN, LED_GREEN_OFF, RED, Led, VerticalGauge, fmt, indicator, section, spin
 
@@ -92,6 +92,19 @@ class ManualPanel(QObject):
         left.addSpacing(8)
         left.addWidget(QLabel("Current Speed"))
         left.addWidget(self.speed_label)
+        left.addSpacing(8)
+        self.slow_approach_btn = QPushButton("🐢  Slow approach")
+        self.slow_approach_btn.setCheckable(True)
+        self.slow_approach_btn.setMinimumHeight(30)
+        self.slow_approach_btn.setToolTip(
+            f"While on, Z never moves down faster than {SLOW_APPROACH_UM_S:g} µm/s\n"
+            "(jog down, Move Z to, presets). Upward motion keeps the set speed. Home Z is refused."
+        )
+        self.slow_approach_btn.setStyleSheet(
+            f"QPushButton:checked {{ background:{AMBER}; color:black; font-weight:bold; }}"
+        )
+        self.slow_approach_btn.toggled.connect(self._on_slow_approach_toggled)
+        left.addWidget(self.slow_approach_btn)
         left.addStretch(1)
         right = QVBoxLayout()
         right.addWidget(QLabel("Z-Position"))
@@ -112,7 +125,7 @@ class ManualPanel(QObject):
         v.addWidget(section("Sample Rotator", extra=self.rot_status))
         grid = QGridLayout()
         self.angle_label = indicator("—")
-        self.angle_spin = spin(-360, 360, 0, decimals=2, step=1, suffix=" °")
+        self.angle_spin = spin(ROTATOR_MIN_DEG, ROTATOR_MAX_DEG, 0, decimals=2, step=1, suffix=" °")
         self.set_angle_btn = QPushButton("✔ Set")
         self.set_angle_btn.clicked.connect(lambda: self.c.rotate_to.emit(self.angle_spin.value()))
         grid.addWidget(QLabel("Current Angle"), 0, 0, Qt.AlignRight)
@@ -370,6 +383,12 @@ class ManualPanel(QObject):
             self.goto_preset_btn,
         ):
             w.setEnabled(not on)
+
+    def _on_slow_approach_toggled(self, on: bool) -> None:
+        self.c.set_slow_approach.emit(on)
+        self.message.emit(
+            f"Slow approach on: Z moves down at most {SLOW_APPROACH_UM_S:g} µm/s" if on else "Slow approach off"
+        )
 
     def toggle_safe_lock(self) -> None:
         self.safe_lock_btn.toggle()

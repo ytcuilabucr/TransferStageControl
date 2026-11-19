@@ -16,11 +16,13 @@ pid:
   period_ms: 500
   output_low: 0.0
   output_high: 24.0
-  ff_k_c_per_v2: 0.618
-  ff_t_amb_c: 37.7
+  ff_k_c_per_v2: 0.77
+  ff_t_amb_c: 24.5
   ff_tau_s: 265.0
 ramp:
   default_rate_deg_min: 10.0
+  dial_step_c: 1.0
+  set_enables_psu: true
 motion:
   speed_steps_um_s:
   - 1.0
@@ -45,6 +47,11 @@ keys:
   jog_up: Ctrl+F2
   jog_down: Ctrl+F3
   mark: Ctrl+F7
+  setpoint_up: Ctrl+F8
+  setpoint_down: Ctrl+F9
+  setpoint_set: Ctrl+F10
+  ramp_toggle: Ctrl+F11
+  side_alone: Ctrl+F12
 logging:
   dir: logs
   interval_s: 1.0

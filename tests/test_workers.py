@@ -118,6 +118,49 @@ def test_motion_set_speed_clamps_and_applies_to_jog():
     worker.jog_stop()
 
 
+def test_motion_slow_approach_caps_downward_speed():
+    worker, z, _, clock, statuses = _motion()
+    refused = []
+    worker.refused.connect(refused.append)
+    worker.set_speed(500.0)
+    worker.set_slow_approach(True)
+    assert statuses[-1].slow_approach
+
+    worker.jog_start(-1)  # down: capped at 25 µm/s
+    clock.advance(2.0)
+    assert z.position_um == pytest.approx(950.0)
+    worker.set_speed(200.0)  # changing the speed mid-jog does not lift the cap
+    clock.advance(2.0)
+    assert z.position_um == pytest.approx(900.0)
+    worker.jog_stop()
+
+    worker.jog_start(1)  # up: full requested speed
+    clock.advance(1.0)
+    assert z.position_um == pytest.approx(1100.0)
+    worker.jog_stop()
+
+    worker.move_z_to(1000.0)  # move to a lower position: capped too
+    clock.advance(1.0)
+    assert z.position_um == pytest.approx(1075.0)
+    worker.set_slow_approach(False)  # lifting the cap re-issues the move at full speed
+    clock.advance(0.25)
+    assert z.position_um == pytest.approx(1025.0)
+    clock.advance(1.0)
+    worker.poll()
+    assert z.position_um == pytest.approx(1000.0)
+    assert z.velocity_um_s == pytest.approx(200.0)
+
+    worker.jog_start(-1)  # turning it on mid-jog slows the running jog down
+    clock.advance(1.0)
+    worker.set_slow_approach(True)
+    clock.advance(1.0)
+    assert z.position_um == pytest.approx(775.0)
+    worker.jog_stop()
+
+    worker.home_z()
+    assert refused and "slow approach" in refused[-1]
+
+
 def test_motion_safe_lock_blocks_everything_but_stop():
     worker, z, rot, clock, statuses = _motion()
     refused = []
@@ -148,6 +191,17 @@ def test_motion_safe_lock_blocks_everything_but_stop():
     assert rot.state is MotorState.MOVING
     worker.cancel_motion()
     assert rot.state is MotorState.IDLE
+
+
+def test_rotate_to_limited_to_plus_minus_90():
+    worker, _, rot, _, _ = _motion()
+    refused = []
+    worker.refused.connect(refused.append)
+    worker.rotate_to(120.0)
+    worker.rotate_to(-90.5)
+    assert len(refused) == 2 and rot.state is MotorState.IDLE
+    worker.rotate_to(-90.0)
+    assert rot.state is MotorState.MOVING
 
 
 def test_motion_device_errors_become_signals():

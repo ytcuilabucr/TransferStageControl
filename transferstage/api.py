@@ -43,7 +43,7 @@ from pathlib import Path
 
 from .config import Config, load_config
 from .control.autotune import AutotuneParams, AutotuneResult, AutotuneState
-from .control.motion import MotionStatus
+from .control.motion import ROTATOR_MAX_DEG, ROTATOR_MIN_DEG, MotionStatus
 from .control.safety import SafetyMonitor, safe_shutdown
 from .control.thermal import ThermalSample, ThermalWorker
 from .datalog import DataLogger, run_metadata
@@ -410,6 +410,8 @@ class Stage:
         target = float(deg) + (self._device("read rotator", lambda: r.angle_deg) if relative else 0.0)
         if not math.isfinite(target):
             raise StageError(f"rotate: invalid angle {deg!r}")
+        if not ROTATOR_MIN_DEG <= target <= ROTATOR_MAX_DEG:
+            raise StageError(f"rotate: {target:g}° is outside {ROTATOR_MIN_DEG:g}..{ROTATOR_MAX_DEG:g}°")
         self._device("rotate", r.move_to, target)
         if wait:
             self._wait_idle(r, "rotate", timeout_s)
